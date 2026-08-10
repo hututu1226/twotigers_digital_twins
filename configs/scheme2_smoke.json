@@ -1,0 +1,49 @@
+{
+  "scheme": "scheme2",
+  "seed": 2026,
+  "data": {
+    "root": "Round2_Map",
+    "artifacts": "artifacts/preprocessed",
+    "batch_size": 2,
+    "num_workers": 0,
+    "train_limit": 12,
+    "validation_limit": 6
+  },
+  "model": {
+    "hidden_dim": 24,
+    "fourier_bands": 2,
+    "token_count": 4,
+    "model_dim": 32,
+    "attention_heads": 4,
+    "transformer_layers": 1,
+    "feedforward_dim": 64
+  },
+  "loss_weights": {
+    "bs": 0.1,
+    "outage": 0.2,
+    "power": 0.1,
+    "ad": 0.2,
+    "pas": 0.4,
+    "pdp": 0.4,
+    "nmse": 0.2
+  },
+  "training": {
+    "device": "cpu",
+    "amp": false,
+    "output_dir": "artifacts/runs/scheme2_smoke",
+    "outage_threshold": 0.5,
+    "phases": [
+      {
+        "name": "joint",
+        "epochs": 1,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0001,
+        "gradient_clip": 1.0
+      }
+    ]
+  },
+  "inference": {
+    "batch_size": 2
+  }
+}
+

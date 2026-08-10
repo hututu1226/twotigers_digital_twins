@@ -1,0 +1,67 @@
+{
+  "scheme": "scheme1",
+  "seed": 2026,
+  "data": {
+    "root": "Round2_Map",
+    "artifacts": "artifacts/preprocessed",
+    "batch_size": 8,
+    "num_workers": 2,
+    "train_limit": null,
+    "validation_limit": null
+  },
+  "model": {
+    "hidden_dim": 128,
+    "fourier_bands": 6,
+    "latent_dim": 256,
+    "base_channels": 16
+  },
+  "loss_weights": {
+    "bs": 0.1,
+    "outage": 0.2,
+    "power": 0.1,
+    "latent": 0.5,
+    "ad": 0.2,
+    "reconstruction": 0.2,
+    "pas": 0.4,
+    "pdp": 0.4,
+    "nmse": 0.2
+  },
+  "training": {
+    "device": "cuda",
+    "amp": true,
+    "output_dir": "artifacts/runs/scheme1_4070",
+    "outage_threshold": 0.5,
+    "phases": [
+      {
+        "name": "autoencoder",
+        "epochs": 120,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0001,
+        "gradient_clip": 1.0,
+        "early_stopping_patience": 30,
+        "early_stopping_min_delta": 0.0001
+      },
+      {
+        "name": "predictor",
+        "epochs": 180,
+        "learning_rate": 0.0008,
+        "weight_decay": 0.0001,
+        "gradient_clip": 1.0,
+        "early_stopping_patience": 40,
+        "early_stopping_min_delta": 0.0001
+      },
+      {
+        "name": "joint",
+        "epochs": 80,
+        "learning_rate": 0.0002,
+        "weight_decay": 0.0001,
+        "gradient_clip": 1.0,
+        "early_stopping_patience": 30,
+        "early_stopping_min_delta": 0.0001
+      }
+    ]
+  },
+  "inference": {
+    "batch_size": 8
+  }
+}
