@@ -78,4 +78,4 @@ Windows PowerShell 可将续行符替换为反引号，或将命令写成一行�
 - [方案二算法说明](docs/scheme2_algorithm.md)
 - [方案二运行说明](docs/scheme2_runbook.md)
 - [Git 与 GitHub 协作指南](docs/git_github_guide.md)
-
+- [AutoDL RTX 4090 完整训练与结果回传教程](docs/autodl_4090_full_guide.md)
