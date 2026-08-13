@@ -1,0 +1,96 @@
+{
+  "seed": 2026,
+  "data": {
+    "root": "../Round2_Map"
+  },
+  "split": {
+    "validation_fold": null
+  },
+  "preprocessing": {
+    "artifact_dir": "artifacts/preprocessed_1m",
+    "grid_resolution": 1.0,
+    "grid_margin": 4.0,
+    "fold_count": 5,
+    "sector_half_angle_degrees": 61.0,
+    "maximum_distance": 205.0,
+    "test_component_link_meters": 6.0,
+    "channel_chunk_size": 8
+  },
+  "runtime": {
+    "device": "auto",
+    "amp": true,
+    "workers": 4,
+    "spatial_workers": 0,
+    "train_limit": 0,
+    "validation_limit": 0,
+    "encoding_limit": 0,
+    "test_limit": 0
+  },
+  "autoencoder": {
+    "base_channels": 16,
+    "latent_dim": 256,
+    "batch_size": 8,
+    "validation_batch_size": 8,
+    "epochs": 100,
+    "learning_rate": 0.001,
+    "minimum_learning_rate": 0.000003,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "gradient_accumulation": 1,
+    "validation_interval": 2,
+    "early_stopping_patience": 0,
+    "minimum_delta": 0.0001,
+    "loss_weights": {
+      "angle_delay": 1.0,
+      "pas": 0.2,
+      "pdp": 0.2,
+      "nmse": 0.1
+    },
+    "output_dir": "artifacts/final/autoencoder"
+  },
+  "encoding": {
+    "autoencoder_checkpoint": "artifacts/final/autoencoder/final.pt",
+    "output_path": "artifacts/final/encoded.npz",
+    "batch_size": 16,
+    "minimum_latent_std": 0.001,
+    "minimum_power_std": 0.1
+  },
+  "spatial": {
+    "base_channels": 32,
+    "dropout": 0.05,
+    "crop_size": 96,
+    "hole_min_meters": 12.0,
+    "hole_max_meters": 48.0,
+    "minimum_targets": 2,
+    "maximum_targets": 24,
+    "crops_per_epoch": 96,
+    "batch_size": 2,
+    "epochs": 150,
+    "learning_rate": 0.0005,
+    "minimum_learning_rate": 0.000002,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "gradient_accumulation": 1,
+    "validation_interval": 5,
+    "validation_decode_batch_size": 8,
+    "early_stopping_patience": 0,
+    "minimum_delta": 0.0001,
+    "outage_threshold": 0.5,
+    "outage_positive_weight": 0.0,
+    "loss_weights": {
+      "latent": 1.0,
+      "power": 0.5,
+      "outage": 0.2,
+      "pas": 0.2,
+      "pdp": 0.2,
+      "nmse": 0.1
+    },
+    "output_dir": "artifacts/final/spatial"
+  },
+  "inference": {
+    "spatial_checkpoint": "artifacts/final/spatial/final.pt",
+    "output_path": "outputs/final/Round2_Test_Channel.npy",
+    "outage_threshold": 0.5,
+    "decode_batch_size": 16
+  }
+}

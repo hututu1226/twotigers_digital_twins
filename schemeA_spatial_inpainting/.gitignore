@@ -1,0 +1,9 @@
+artifacts/
+outputs/
+logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+configs/final_selected.json
+schemeA_results_*.tar.gz
+schemeA_results_*.tar.gz.sha256

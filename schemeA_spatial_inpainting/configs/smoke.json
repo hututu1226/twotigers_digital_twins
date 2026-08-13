@@ -1,0 +1,96 @@
+{
+  "seed": 2026,
+  "data": {
+    "root": "../Round2_Map"
+  },
+  "split": {
+    "validation_fold": 0
+  },
+  "preprocessing": {
+    "artifact_dir": "artifacts/smoke/preprocessed_4m",
+    "grid_resolution": 4.0,
+    "grid_margin": 8.0,
+    "fold_count": 5,
+    "sector_half_angle_degrees": 61.0,
+    "maximum_distance": 205.0,
+    "test_component_link_meters": 6.0,
+    "channel_chunk_size": 8
+  },
+  "runtime": {
+    "device": "cpu",
+    "amp": false,
+    "workers": 0,
+    "spatial_workers": 0,
+    "train_limit": 4,
+    "validation_limit": 2,
+    "encoding_limit": 20,
+    "test_limit": 2
+  },
+  "autoencoder": {
+    "base_channels": 2,
+    "latent_dim": 8,
+    "batch_size": 1,
+    "validation_batch_size": 1,
+    "epochs": 1,
+    "learning_rate": 0.001,
+    "minimum_learning_rate": 0.00001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "gradient_accumulation": 1,
+    "validation_interval": 1,
+    "early_stopping_patience": 0,
+    "minimum_delta": 0.0001,
+    "loss_weights": {
+      "angle_delay": 1.0,
+      "pas": 0.1,
+      "pdp": 0.1,
+      "nmse": 0.05
+    },
+    "output_dir": "artifacts/smoke/autoencoder"
+  },
+  "encoding": {
+    "autoencoder_checkpoint": "artifacts/smoke/autoencoder/best.pt",
+    "output_path": "artifacts/smoke/encoded.npz",
+    "batch_size": 1,
+    "minimum_latent_std": 0.001,
+    "minimum_power_std": 0.1
+  },
+  "spatial": {
+    "base_channels": 2,
+    "dropout": 0.0,
+    "crop_size": 16,
+    "hole_min_meters": 4.0,
+    "hole_max_meters": 16.0,
+    "minimum_targets": 1,
+    "maximum_targets": 1,
+    "crops_per_epoch": 1,
+    "batch_size": 1,
+    "epochs": 1,
+    "learning_rate": 0.001,
+    "minimum_learning_rate": 0.00001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "gradient_accumulation": 1,
+    "validation_interval": 1,
+    "validation_decode_batch_size": 1,
+    "early_stopping_patience": 0,
+    "minimum_delta": 0.0001,
+    "outage_threshold": 0.5,
+    "outage_positive_weight": 0.0,
+    "loss_weights": {
+      "latent": 1.0,
+      "power": 0.5,
+      "outage": 0.2,
+      "pas": 0.1,
+      "pdp": 0.1,
+      "nmse": 0.05
+    },
+    "output_dir": "artifacts/smoke/spatial"
+  },
+  "inference": {
+    "spatial_checkpoint": "artifacts/smoke/spatial/best.pt",
+    "output_path": "outputs/smoke/Round2_Test_Channel.npy",
+    "outage_threshold": 0.5,
+    "decode_batch_size": 1
+  }
+}
