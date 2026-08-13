@@ -1,2 +1,4 @@
 *.sh text eol=lf
 twotigers_0813_results filter=lfs diff=lfs merge=lfs -text
+Round2_Test_Channel_scheme1.npy filter=lfs diff=lfs merge=lfs -text
+Round2_Test_Channel_scheme2.npy filter=lfs diff=lfs merge=lfs -text
