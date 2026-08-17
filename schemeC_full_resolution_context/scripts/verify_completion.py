@@ -109,6 +109,15 @@ def verify_fold0(project: Path) -> dict:
         name: verify_evaluation(artifact_root / name / "evaluation.json")
         for name in ("autoencoder", "context", "joint")
     }
+    ablation = read_json(artifact_root / "autoencoder" / "ablation.json")
+    gate = read_json(artifact_root / "autoencoder" / "quality_gate.json")
+    if gate.get("status") != "PASS" or not gate.get("context_training_allowed"):
+        raise ValueError("Fold0 AE quality gate did not pass")
+    result["autoencoder_ablation"] = {
+        "detail_gain": float(ablation["detail_gain"]),
+        "shuffle_drop": float(ablation["shuffle_drop"]),
+    }
+    result["autoencoder_quality_gate"] = gate
     scan = read_json(artifact_root / "joint" / "outage_scan.json")
     threshold = float(scan["best_threshold"])
     if not 0.0 < threshold < 1.0:
@@ -152,9 +161,35 @@ def verify_smoke(project: Path) -> dict:
     return result
 
 
+def verify_capacity(project: Path) -> dict:
+    root = project / "artifacts" / "capacity"
+    reports = {
+        "one_sample": read_json(root / "one_sample.json"),
+        "thirty_two_samples": read_json(root / "thirty_two_samples.json"),
+    }
+    for name, report in reports.items():
+        score = float(report["metrics"]["score"])
+        minimum = float(report["minimum_score"])
+        if report.get("architecture") != "factorized_residual_v4":
+            raise ValueError(f"Capacity report {name} uses an old AE architecture")
+        if int(report.get("total_latent_dim", 0)) != 30720:
+            raise ValueError(f"Capacity report {name} did not test 30,720 latents")
+        if report.get("status") != "PASS" or score < minimum:
+            raise ValueError(
+                f"Capacity report {name} failed: score={score}, minimum={minimum}"
+            )
+    if int(reports["one_sample"].get("samples", 0)) != 1:
+        raise ValueError("One-sample capacity report did not use exactly one sample")
+    if int(reports["thirty_two_samples"].get("samples", 0)) != 32:
+        raise ValueError("32-sample capacity report did not use exactly 32 samples")
+    return reports
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify that a Scheme C run is complete")
-    parser.add_argument("--stage", choices=("smoke", "fold0", "final"), required=True)
+    parser.add_argument(
+        "--stage", choices=("smoke", "capacity", "fold0", "final"), required=True
+    )
     parser.add_argument(
         "--project", default=str(Path(__file__).resolve().parents[1])
     )
@@ -164,6 +199,8 @@ def main() -> None:
     try:
         if args.stage == "smoke":
             details = verify_smoke(project)
+        elif args.stage == "capacity":
+            details = verify_capacity(project)
         elif args.stage == "fold0":
             details = verify_fold0(project)
         else:

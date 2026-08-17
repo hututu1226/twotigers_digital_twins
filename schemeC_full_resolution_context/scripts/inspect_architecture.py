@@ -63,7 +63,18 @@ def main() -> None:
         if layer.in_features >= total_latent or layer.out_features >= total_latent
     ]
     report = {
+        "autoencoder_architecture": config["autoencoder"].get("architecture", "structured_v2"),
         "autoencoder_parameters": parameter_count(autoencoder),
+        "autoencoder_branch_parameters": {
+            "spectrum_encoder": parameter_count(autoencoder.spectrum_encoder),
+            "detail_encoder": parameter_count(autoencoder.phase_encoder),
+            "spectrum_decoder": parameter_count(autoencoder.decoder.spectrum_decoder)
+            if hasattr(autoencoder.decoder, "spectrum_decoder")
+            else None,
+            "detail_decoder": parameter_count(autoencoder.decoder.detail_decoder)
+            if hasattr(autoencoder.decoder, "detail_decoder")
+            else None,
+        },
         "context_parameters": parameter_count(context),
         "spectrum_shape": list(autoencoder.spectrum_shape.tensor_shape),
         "spectrum_elements": autoencoder.spectrum_latent_dim,

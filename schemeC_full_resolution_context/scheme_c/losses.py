@@ -57,6 +57,36 @@ def complex_coherence_loss(
     return (1.0 - coherence.clamp(-1.0, 1.0)).mean()
 
 
+def energy_weighted_complex_direction_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    shape: ChannelShape,
+    epsilon: float = 1e-8,
+) -> torch.Tensor:
+    """Compare real/imaginary direction per angle-delay bin, weighted by target energy."""
+    predicted = prediction.float().reshape(
+        len(prediction),
+        shape.m_p * shape.n,
+        2,
+        shape.m_v,
+        shape.m_h,
+        shape.s,
+    )
+    expected = target.float().reshape_as(predicted)
+    predicted_norm = predicted.square().sum(dim=2).clamp_min(epsilon).sqrt()
+    expected_power = expected.square().sum(dim=2)
+    expected_norm = expected_power.clamp_min(epsilon).sqrt()
+    cosine = (predicted * expected).sum(dim=2) / (
+        predicted_norm * expected_norm
+    )
+    weights = expected_power.sqrt()
+    valid = expected_power > epsilon
+    weighted = (1.0 - cosine.clamp(-1.0, 1.0)) * weights
+    return weighted.masked_fill(~valid, 0.0).sum() / weights.masked_fill(
+        ~valid, 0.0
+    ).sum().clamp_min(epsilon)
+
+
 def metric_aligned_channel_losses(
     prediction: torch.Tensor,
     target: torch.Tensor,

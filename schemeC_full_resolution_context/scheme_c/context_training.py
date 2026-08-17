@@ -10,7 +10,11 @@ import torch
 import torch.nn.functional as functional
 
 from .angle_delay import ChannelShape, channel_to_shape_target, shape_to_channel
-from .autoencoder import MetricHighFidelityAutoencoder, StructuredAngleDelayAutoencoder
+from .autoencoder import (
+    FactorizedResidualAutoencoder,
+    MetricHighFidelityAutoencoder,
+    StructuredAngleDelayAutoencoder,
+)
 from .autoencoder_training import load_autoencoder_checkpoint
 from .config import (
     append_jsonl,
@@ -28,7 +32,11 @@ from .losses import joint_power_loss, metric_aligned_channel_losses, weighted_su
 from .metrics import ChannelMetricAccumulator
 
 
-Autoencoder = StructuredAngleDelayAutoencoder | MetricHighFidelityAutoencoder
+Autoencoder = (
+    StructuredAngleDelayAutoencoder
+    | MetricHighFidelityAutoencoder
+    | FactorizedResidualAutoencoder
+)
 
 
 def build_context_model(

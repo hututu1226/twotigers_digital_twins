@@ -58,10 +58,15 @@ done
 
 optional=(
   configs/final_selected.json
+  artifacts/capacity/one_sample.json
+  artifacts/capacity/thirty_two_samples.json
+  artifacts/capacity/completion_report.json
   artifacts/fold0/autoencoder/best.pt
   artifacts/fold0/autoencoder/history.jsonl
   artifacts/fold0/autoencoder/summary.json
   artifacts/fold0/autoencoder/evaluation.json
+  artifacts/fold0/autoencoder/ablation.json
+  artifacts/fold0/autoencoder/quality_gate.json
   artifacts/fold0/encoded.npz
   artifacts/fold0/encoded.json
   artifacts/fold0/context/best.pt

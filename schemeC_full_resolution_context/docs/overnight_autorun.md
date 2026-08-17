@@ -2,7 +2,7 @@
 
 ## 1. 直接结论
 
-可以让 Scheme C 从 Fold0 开始，一直执行到 4000 条全量训练、生成 500 条 `Round2_Test_Channel.npy`、校验、打包，最后自动关闭 AutoDL 实例。
+可以让 Scheme C 无人值守训练、校验、打包并自动关闭 AutoDL 实例。考虑单次最多约 8 小时，默认分成两个租卡时段：第一晚跑 AE 容量门槛和 Fold0，第二晚跑 4000 条全量训练和最终测试集。
 
 可以把它理解成洗衣机的预约程序：不是每隔一分钟猜衣服是否洗完，而是“洗涤程序正常结束并检查排水”后才进入漂洗。这里对应关系是：
 
@@ -30,33 +30,39 @@ AutoDL 官方说明：
 
 ## 3. 脚本会做什么
 
-`scripts/run_overnight_pipeline.sh` 按顺序执行：
+`scripts/run_overnight_pipeline.sh` 支持三种模式：
+
+- `PIPELINE_MODE=fold0`：默认模式，容量测试、Fold0、打包、关机。
+- `PIPELINE_MODE=final`：要求已有合格 Fold0，全量训练、推理、打包、关机。
+- `PIPELINE_MODE=all`：连续做前两项，可能超过 8 小时，不推荐受限时使用。
+
+默认 Fold0 模式按顺序执行：
 
 1. 获取独占锁，防止同一项目启动两个夜间脚本。
-2. 检查 Fold0 是否已经完整结束。
-3. Fold0 不完整时从 `last.pt` 续训；完整时直接跳过。
-4. 验证 Fold0 三阶段 checkpoint、指标、30,720 维 latent 和 500 条输出。
-5. 根据 Fold0 最佳 epoch 和 outage threshold 生成 `final_selected.json`。
-6. 使用全部 4000 条训练样本执行 AE、Context 和 Joint 最终训练。
-7. 生成最终 500 条测试信道。
-8. 验证 shape、dtype、NaN/Inf、checkpoint 时间和 encoded latent。
-9. 打包模型、输出、日志、配置和说明书，并验证 SHA256。
-10. 如果已挂载 `/root/autodl-fs`，额外复制一份结果包。
-11. 写入成功状态，执行 `/usr/bin/shutdown`。
+2. 运行或验证 1/32 样本 AE 容量门槛。
+3. Fold0 不完整时从兼容的 `last.pt` 续训；完整时直接跳过。
+4. AE 训练后检查 Score、去 Detail 增益和打乱 Detail 下降。
+5. 只有 AE 门槛通过才运行 Context 与 Joint。
+6. 验证 Fold0 checkpoint、指标、30,720 维 latent 和 500 条输出。
+7. 打包 Fold0 并验证 SHA256。
+8. 如果已挂载 `/root/autodl-fs`，额外复制一份结果包。
+9. 写入成功状态，执行 `/usr/bin/shutdown`。
+
+Final 模式会先重新验证 Fold0 和 AE 门槛，再生成 `final_selected.json`，然后运行 4000 条全量训练、最终推理、格式验证和结果打包。
 
 任一步失败时，脚本会写入失败状态、打包诊断日志，并默认关机，避免你睡觉时实例空转。
 
 ## 4. 从头执行需要多久
 
-若当前只完成了冒烟测试，从 Fold0 到全量最终训练是两套训练：
+若当前只完成了冒烟测试，总共需要两套训练：
 
 | 部分 | 5090/5090D 工程预估 |
 | --- | ---: |
-| Fold0 训练、评测、推理 | 约 5 到 8 小时 |
+| 容量门槛 + Fold0 训练、评测、推理 | 约 5.5 到 8 小时 |
 | 4000 条全量最终训练和推理 | 约 5 到 8 小时 |
 | 总计 | 约 10 到 16 小时 |
 
-所以今晚启动后，明早不一定已经结束；但脚本会在真正结束的时刻自行关机。如果 Fold0 已完整跑完，脚本会验证后跳过，剩余时间约为全量阶段用时。
+因此不要在 8 小时预算下使用 `PIPELINE_MODE=all`。第一晚默认 Fold0 模式完成并关机；确认 Fold0 AE 门槛和分数值得继续后，第二晚使用 Final 模式。如果 Fold0 已完整跑完，Final 模式只做全量阶段。
 
 这是预估，不是保证。实际时间受 5090/5090D 型号、PyTorch SDPA、地图尺寸和验证次数影响。
 
@@ -84,10 +90,11 @@ rm -f NO_AUTO_SHUTDOWN
 mkdir -p logs
 ```
 
-后台启动完整流水线：
+后台启动第一阶段 Fold0 流水线：
 
 ```bash
 nohup env \
+  PIPELINE_MODE=fold0 \
   CONFIRM_AUTODL_SHUTDOWN=YES \
   SHUTDOWN_ON_SUCCESS=1 \
   SHUTDOWN_ON_FAILURE=1 \
@@ -99,6 +106,7 @@ echo $! > logs/overnight.pid
 参数含义：
 
 - `nohup`：SSH 或手机网络断开后，脚本仍继续运行。
+- `PIPELINE_MODE=fold0`：本次只跑容量门槛和 Fold0，不跨入第二套全量训练。
 - `CONFIRM_AUTODL_SHUTDOWN=YES`：明确授权脚本关闭实例，防止误关本机。
 - `SHUTDOWN_ON_SUCCESS=1`：全部成功后关机。
 - `SHUTDOWN_ON_FAILURE=1`：中途失败也关机，避免无人监控时持续计费。
@@ -114,6 +122,21 @@ tail -n 30 logs/overnight_launcher.log
 ```
 
 确认能看到 `Scheme C overnight pipeline started` 后，就可以断开 SSH。
+
+Fold0 下载并确认值得继续后，第二个租卡时段使用：
+
+```bash
+nohup env \
+  PIPELINE_MODE=final \
+  CONFIRM_AUTODL_SHUTDOWN=YES \
+  SHUTDOWN_ON_SUCCESS=1 \
+  SHUTDOWN_ON_FAILURE=1 \
+  bash scripts/run_overnight_pipeline.sh \
+  > logs/overnight_launcher.log 2>&1 &
+echo $! > logs/overnight.pid
+```
+
+Final 模式会拒绝使用未通过 AE 质量门槛的 Fold0，不需要手工判断文件是否齐全。
 
 ## 6. 睡觉前建议再确认四件事
 
@@ -154,7 +177,20 @@ tail -n 100 -f logs/overnight_pipeline.log
 
 如果实例已经自动关机，需要从 AutoDL 控制台以无卡模式或正常模式重新开机，再查看日志和下载结果。
 
-## 8. 最终结果在哪里
+## 8. 两个阶段的结果在哪里
+
+Fold0 模式成功后核心文件为：
+
+```text
+artifacts/capacity/one_sample.json
+artifacts/capacity/thirty_two_samples.json
+artifacts/fold0/autoencoder/quality_gate.json
+artifacts/fold0/completion_report.json
+schemeC_fold0_YYYYMMDD_HHMMSS.tar.gz
+schemeC_fold0_YYYYMMDD_HHMMSS.tar.gz.sha256
+```
+
+Final 模式成功后核心文件为：
 
 成功后核心文件为：
 

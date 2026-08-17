@@ -25,11 +25,19 @@ def main() -> None:
     parser.add_argument("--context-checkpoint", default="artifacts/fold0/context/best.pt")
     parser.add_argument("--joint-checkpoint", default="artifacts/fold0/joint/best.pt")
     parser.add_argument("--outage-report", default="artifacts/fold0/joint/outage_scan.json")
+    parser.add_argument(
+        "--ae-gate", default="artifacts/fold0/autoencoder/quality_gate.json"
+    )
     parser.add_argument("--output", default="configs/final_selected.json")
     parser.add_argument("--epoch-multiplier", type=float, default=1.0)
     args = parser.parse_args()
     if args.epoch_multiplier <= 0:
         raise ValueError("epoch-multiplier must be positive")
+    gate = load_json(Path(args.ae_gate))
+    if gate.get("status") != "PASS" or not gate.get("context_training_allowed"):
+        raise RuntimeError(
+            "Fold0 AE quality gate did not pass; refusing to prepare all-data training"
+        )
     config = load_json(Path(args.template))
     selected_epochs = {
         "autoencoder": trained_epochs(args.ae_checkpoint, args.epoch_multiplier),
@@ -56,6 +64,7 @@ def main() -> None:
                 "output": str(target.resolve()),
                 "selected_epochs": selected_epochs,
                 "outage_threshold": threshold,
+                "autoencoder_quality_gate": gate["status"],
                 "split": config["split"],
             },
             ensure_ascii=False,

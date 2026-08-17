@@ -6,10 +6,17 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
+import torch.nn.functional as functional
 from torch.utils.data import DataLoader
 
-from .angle_delay import ChannelShape, channel_to_shape_target, shape_to_channel
+from .angle_delay import (
+    ChannelShape,
+    channel_to_shape_target,
+    normalize_angle_delay,
+    shape_to_channel,
+)
 from .autoencoder import (
+    FactorizedResidualAutoencoder,
     MetricHighFidelityAutoencoder,
     StructuredAngleDelayAutoencoder,
 )
@@ -27,6 +34,7 @@ from .data import ChannelDataset, balanced_limit, load_manifest, load_metadata, 
 from .losses import (
     complex_coherence_loss,
     energy_weighted_angle_delay_mse,
+    energy_weighted_complex_direction_loss,
     joint_power_loss,
     metric_aligned_channel_losses,
     weighted_sum,
@@ -34,11 +42,36 @@ from .losses import (
 from .metrics import ChannelMetricAccumulator
 
 
+Autoencoder = (
+    StructuredAngleDelayAutoencoder
+    | MetricHighFidelityAutoencoder
+    | FactorizedResidualAutoencoder
+)
+
+
 def build_autoencoder(
     config: dict, shape: ChannelShape
-) -> StructuredAngleDelayAutoencoder | MetricHighFidelityAutoencoder:
+) -> Autoencoder:
     section = config["autoencoder"]
     architecture = section.get("architecture", "structured_v2")
+    if architecture == "factorized_residual_v4":
+        return FactorizedResidualAutoencoder(
+            shape,
+            spectrum_stem_channels=int(section["spectrum_stem_channels"]),
+            phase_stem_channels=int(section["phase_stem_channels"]),
+            spectrum_latent_channels=int(section["spectrum_latent_channels"]),
+            phase_latent_channels=int(section["phase_latent_channels"]),
+            residual_blocks=int(section.get("residual_blocks", 3)),
+            spectrum_log_scale=float(section.get("spectrum_log_scale", 4.0)),
+            detail_hidden_channels=int(section.get("detail_hidden_channels", 64)),
+            spectrum_decoder_channels=int(
+                section.get("spectrum_decoder_channels", 64)
+            ),
+            detail_decoder_channels=int(section.get("detail_decoder_channels", 64)),
+            detail_gain=float(section.get("detail_gain", 2.0)),
+            maximum_log_power=float(section.get("maximum_log_power", 12.0)),
+            envelope_floor=float(section.get("envelope_floor", 1e-4)),
+        )
     if architecture == "metric_high_fidelity_v3":
         return MetricHighFidelityAutoencoder(
             shape,
@@ -66,7 +99,7 @@ def load_autoencoder_checkpoint(
     checkpoint_path: str | Path,
     device: torch.device,
 ) -> tuple[
-    StructuredAngleDelayAutoencoder | MetricHighFidelityAutoencoder,
+    Autoencoder,
     ChannelShape,
     dict,
 ]:
@@ -81,11 +114,12 @@ def load_autoencoder_checkpoint(
 
 @torch.no_grad()
 def evaluate_autoencoder(
-    model: StructuredAngleDelayAutoencoder | MetricHighFidelityAutoencoder,
+    model: Autoencoder,
     loader: DataLoader,
     shape: ChannelShape,
     device: torch.device,
     amp: bool,
+    detail_scale: float = 1.0,
 ) -> dict[str, float]:
     model.eval()
     full_metrics = ChannelMetricAccumulator(shape)
@@ -97,7 +131,10 @@ def evaluate_autoencoder(
         channel = batch["channel"].to(device, non_blocking=True)
         target_shape, log_power, outage = channel_to_shape_target(channel, shape)
         with autocast_context(device, amp):
-            prediction_shape, spectrum, phase = model(target_shape)
+            if isinstance(model, FactorizedResidualAutoencoder):
+                prediction_shape, spectrum, phase = model(target_shape, detail_scale)
+            else:
+                prediction_shape, spectrum, phase = model(target_shape)
             spectrum_shape = model.decode(spectrum, None)
         prediction = shape_to_channel(prediction_shape, log_power, shape, outage)
         spectrum_prediction = shape_to_channel(spectrum_shape, log_power, shape, outage)
@@ -116,15 +153,64 @@ def evaluate_autoencoder(
             "spectrum_only_pdp": spectrum_result["pdp"],
             "spectrum_only_nmse": spectrum_result["nmse"],
             "spectrum_only_score": spectrum_result["score"],
+            "detail_gain_over_coarse": result["score"] - spectrum_result["score"],
             "samples": samples,
         }
     )
     return result
 
 
+@torch.no_grad()
+def evaluate_autoencoder_ablations(
+    model: Autoencoder,
+    loader: DataLoader,
+    shape: ChannelShape,
+    device: torch.device,
+    amp: bool,
+) -> dict[str, object]:
+    model.eval()
+    accumulators = {
+        "full": ChannelMetricAccumulator(shape),
+        "coarse_only": ChannelMetricAccumulator(shape),
+        "shuffled_detail": ChannelMetricAccumulator(shape),
+    }
+    samples = 0
+    for batch in loader:
+        channel = batch["channel"].to(device, non_blocking=True)
+        target_shape, log_power, outage = channel_to_shape_target(channel, shape)
+        with autocast_context(device, amp):
+            spectrum, detail = model.encode(target_shape)
+            full_shape = model.decode(spectrum, detail)
+            coarse_shape = model.decode(spectrum, None)
+            shuffled_detail = detail.roll(1, dims=0) if len(detail) > 1 else -detail
+            shuffled_shape = model.decode(spectrum, shuffled_detail)
+        predictions = {
+            "full": shape_to_channel(full_shape, log_power, shape, outage),
+            "coarse_only": shape_to_channel(
+                coarse_shape, log_power, shape, outage
+            ),
+            "shuffled_detail": shape_to_channel(
+                shuffled_shape, log_power, shape, outage
+            ),
+        }
+        for name, prediction in predictions.items():
+            accumulators[name].update(prediction, channel, outage)
+        samples += len(channel)
+    metrics = {name: value.compute() for name, value in accumulators.items()}
+    full_score = float(metrics["full"]["score"])
+    coarse_score = float(metrics["coarse_only"]["score"])
+    shuffled_score = float(metrics["shuffled_detail"]["score"])
+    return {
+        "samples": samples,
+        "metrics": metrics,
+        "detail_gain": full_score - coarse_score,
+        "shuffle_drop": full_score - shuffled_score,
+    }
+
+
 def _save_checkpoint(
     path: Path,
-    model: StructuredAngleDelayAutoencoder | MetricHighFidelityAutoencoder,
+    model: Autoencoder,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     scaler,
@@ -155,6 +241,91 @@ def _save_checkpoint(
         },
         path,
     )
+
+
+def autoencoder_training_stage(section: dict, epoch: int) -> str:
+    coarse_epochs = max(0, int(section.get("coarse_pretrain_epochs", 0)))
+    detail_epochs = max(0, int(section.get("detail_pretrain_epochs", 0)))
+    if epoch < coarse_epochs:
+        return "coarse"
+    if epoch < coarse_epochs + detail_epochs:
+        return "detail"
+    return "joint"
+
+
+def _spectrum_power_terms(
+    prediction: torch.Tensor, target: torch.Tensor
+) -> dict[str, torch.Tensor]:
+    return {
+        "spectrum_power": functional.smooth_l1_loss(prediction, target),
+        "spectrum_angle_marginal": functional.smooth_l1_loss(
+            prediction.mean(dim=-1), target.mean(dim=-1)
+        ),
+        "spectrum_delay_marginal": functional.smooth_l1_loss(
+            prediction.mean(dim=(2, 3)), target.mean(dim=(2, 3))
+        ),
+    }
+
+
+def factorized_autoencoder_batch(
+    model: FactorizedResidualAutoencoder,
+    target_shape: torch.Tensor,
+    log_power: torch.Tensor,
+    channel: torch.Tensor,
+    shape: ChannelShape,
+    section: dict,
+    stage: str,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    spectrum_map = model.spectrum_input(target_shape)
+    spectrum_tensor = model.spectrum_encoder(spectrum_map)
+    spectrum = spectrum_tensor.flatten(1)
+    if stage == "coarse":
+        components = model.decode_components(spectrum, None, detail_scale=0.0)
+    else:
+        detail = model.phase_encoder(target_shape).flatten(1)
+        components = model.decode_components(spectrum, detail, detail_scale=1.0)
+    prediction_shape = components["prediction"]
+    terms = _spectrum_power_terms(
+        components["spectrum_log_power"], spectrum_map
+    )
+    if stage != "coarse":
+        prediction = shape_to_channel(prediction_shape, log_power, shape)
+        terms.update(
+            {
+                "angle_delay": energy_weighted_angle_delay_mse(
+                    prediction_shape,
+                    target_shape,
+                    shape,
+                    float(section.get("energy_emphasis", 2.0)),
+                    float(section.get("maximum_energy_weight", 16.0)),
+                ),
+                "joint_power": joint_power_loss(
+                    prediction_shape, target_shape, shape
+                ),
+                "coherence": complex_coherence_loss(
+                    prediction_shape, target_shape
+                ),
+                "complex_direction": energy_weighted_complex_direction_loss(
+                    prediction_shape, target_shape, shape
+                ),
+                **metric_aligned_channel_losses(prediction, channel, shape),
+            }
+        )
+        residual_target = normalize_angle_delay(
+            target_shape
+            - components["coarse"].detach() / model.decoder.detail_gain
+        )
+        terms["detail_angle_delay"] = energy_weighted_angle_delay_mse(
+            components["detail_residual"],
+            residual_target,
+            shape,
+            float(section.get("energy_emphasis", 2.0)),
+            float(section.get("maximum_energy_weight", 16.0)),
+        )
+        terms["detail_coherence"] = complex_coherence_loss(
+            components["detail_residual"], residual_target
+        )
+    return prediction_shape, terms
 
 
 def train_autoencoder(config: dict, resume: bool = False) -> dict:
@@ -220,9 +391,17 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
             min_lr=float(section.get("minimum_learning_rate", 1e-6)),
         )
     elif scheduler_name == "cosine":
+        scheduler_epochs = epochs
+        if section.get("architecture") == "factorized_residual_v4":
+            scheduler_epochs -= max(
+                0, int(section.get("coarse_pretrain_epochs", 0))
+            )
+            scheduler_epochs -= max(
+                0, int(section.get("detail_pretrain_epochs", 0))
+            )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=max(epochs, 1),
+            T_max=max(scheduler_epochs, 1),
             eta_min=float(section.get("minimum_learning_rate", 1e-6)),
         )
     else:
@@ -264,6 +443,9 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
         resumed_metrics = checkpoint.get("metrics", {})
 
     weights = section["loss_weights"]
+    coarse_weights = section.get("coarse_loss_weights", weights)
+    detail_weights = section.get("detail_loss_weights", weights)
+    factorized = isinstance(model, FactorizedResidualAutoencoder)
     accumulation = int(section.get("gradient_accumulation", 1))
     validation_interval = int(section.get("validation_interval", 1))
     patience = int(section.get("early_stopping_patience", 0))
@@ -277,68 +459,107 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
     maximum_training_hours = float(section.get("maximum_training_hours", 0.0))
     training_started = time.perf_counter()
     stop_reason = "maximum_epochs"
+    previous_stage: str | None = None
     for epoch in range(start_epoch, epochs):
         last_epoch = epoch
         started = time.perf_counter()
+        stage = (
+            autoencoder_training_stage(section, epoch)
+            if factorized
+            else "legacy"
+        )
+        if factorized:
+            model.set_trainable_stage(stage)
+        if stage != previous_stage:
+            print(f"AE training stage -> {stage} (epoch {epoch + 1})", flush=True)
+            previous_stage = stage
         model.train()
         optimizer.zero_grad(set_to_none=True)
         sums: defaultdict[str, float] = defaultdict(float)
         batches = 0
-        detail_scale = min(
-            1.0,
-            max(0.0, (epoch - detail_warmup_epochs + 1) / detail_ramp_epochs),
+        detail_scale = (
+            0.0
+            if stage == "coarse"
+            else 1.0
+            if factorized
+            else min(
+                1.0,
+                max(0.0, (epoch - detail_warmup_epochs + 1) / detail_ramp_epochs),
+            )
+        )
+        stage_weights = (
+            coarse_weights
+            if stage == "coarse"
+            else detail_weights
+            if stage == "detail"
+            else weights
         )
         for batch_index, batch in enumerate(train_loader):
             channel = batch["channel"].to(device, non_blocking=True)
             target_shape, log_power, outage = channel_to_shape_target(channel, shape)
             with autocast_context(device, amp):
-                spectrum, phase = model.encode(target_shape)
-                spectrum_shape = model.decode(spectrum, None)
-                prediction_shape = (
-                    spectrum_shape
-                    if detail_scale <= 0.0
-                    else model.decode(spectrum, phase * detail_scale)
-                )
-                prediction = shape_to_channel(prediction_shape, log_power, shape)
-                terms = {
-                    "angle_delay": energy_weighted_angle_delay_mse(
-                        prediction_shape,
+                if factorized:
+                    prediction_shape, terms = factorized_autoencoder_batch(
+                        model,
                         target_shape,
+                        log_power,
+                        channel,
                         shape,
-                        float(section.get("energy_emphasis", 2.0)),
-                        float(section.get("maximum_energy_weight", 16.0)),
-                    ),
-                    "joint_power": joint_power_loss(prediction_shape, target_shape, shape),
-                    "coherence": complex_coherence_loss(
-                        prediction_shape, target_shape
-                    ),
-                    **metric_aligned_channel_losses(prediction, channel, shape),
-                }
-                spectrum_prediction = shape_to_channel(spectrum_shape, log_power, shape)
-                spectrum_terms = metric_aligned_channel_losses(
-                    spectrum_prediction, channel, shape
-                )
-                terms.update(
-                    {
-                        "spectrum_angle_delay": energy_weighted_angle_delay_mse(
-                            spectrum_shape,
+                        section,
+                        stage,
+                    )
+                else:
+                    spectrum, phase = model.encode(target_shape)
+                    spectrum_shape = model.decode(spectrum, None)
+                    prediction_shape = (
+                        spectrum_shape
+                        if detail_scale <= 0.0
+                        else model.decode(spectrum, phase * detail_scale)
+                    )
+                    prediction = shape_to_channel(prediction_shape, log_power, shape)
+                    terms = {
+                        "angle_delay": energy_weighted_angle_delay_mse(
+                            prediction_shape,
                             target_shape,
                             shape,
                             float(section.get("energy_emphasis", 2.0)),
                             float(section.get("maximum_energy_weight", 16.0)),
                         ),
-                        "spectrum_coherence": complex_coherence_loss(
-                            spectrum_shape, target_shape
+                        "joint_power": joint_power_loss(
+                            prediction_shape, target_shape, shape
                         ),
-                        "spectrum_pas": spectrum_terms["pas"],
-                        "spectrum_pdp": spectrum_terms["pdp"],
-                        "spectrum_nmse": spectrum_terms["nmse"],
-                        "spectrum_joint_power": joint_power_loss(
-                            spectrum_shape, target_shape, shape
+                        "coherence": complex_coherence_loss(
+                            prediction_shape, target_shape
                         ),
+                        **metric_aligned_channel_losses(prediction, channel, shape),
                     }
-                )
-                total = weighted_sum(terms, weights) / accumulation
+                    spectrum_prediction = shape_to_channel(
+                        spectrum_shape, log_power, shape
+                    )
+                    spectrum_terms = metric_aligned_channel_losses(
+                        spectrum_prediction, channel, shape
+                    )
+                    terms.update(
+                        {
+                            "spectrum_angle_delay": energy_weighted_angle_delay_mse(
+                                spectrum_shape,
+                                target_shape,
+                                shape,
+                                float(section.get("energy_emphasis", 2.0)),
+                                float(section.get("maximum_energy_weight", 16.0)),
+                            ),
+                            "spectrum_coherence": complex_coherence_loss(
+                                spectrum_shape, target_shape
+                            ),
+                            "spectrum_pas": spectrum_terms["pas"],
+                            "spectrum_pdp": spectrum_terms["pdp"],
+                            "spectrum_nmse": spectrum_terms["nmse"],
+                            "spectrum_joint_power": joint_power_loss(
+                                spectrum_shape, target_shape, shape
+                            ),
+                        }
+                    )
+                total = weighted_sum(terms, stage_weights) / accumulation
             if not torch.isfinite(total):
                 raise FloatingPointError(
                     f"Non-finite AE loss at epoch={epoch + 1}, batch={batch_index + 1}"
@@ -361,16 +582,24 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
             (epoch + 1) % validation_interval == 0 or epoch + 1 == epochs
         )
         validation = (
-            evaluate_autoencoder(model, validation_loader, shape, device, amp)
+            evaluate_autoencoder(
+                model,
+                validation_loader,
+                shape,
+                device,
+                amp,
+                detail_scale=detail_scale,
+            )
             if should_validate
             else {}
         )
         selection_metric = str(section.get("selection_metric", "score"))
         selection_value = float(validation.get(selection_metric, -math.inf))
+        scheduler_active = not factorized or stage == "joint"
         if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-            if validation:
+            if validation and scheduler_active:
                 scheduler.step(selection_value)
-        else:
+        elif scheduler_active:
             scheduler.step()
         final_metrics = validation or train_metrics
         record = {
@@ -380,6 +609,7 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
             "validation": validation,
             "elapsed_seconds": time.perf_counter() - started,
             "detail_scale": detail_scale,
+            "training_stage": stage,
         }
         append_jsonl(history_path, record)
         score = selection_value
@@ -396,7 +626,7 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
         if meaningful_improvement:
             early_stopping_score = score
             epochs_without_improvement = 0
-        elif validation:
+        elif validation and (not factorized or stage == "joint"):
             epochs_without_improvement += validation_interval
         spectrum_improved = (
             bool(validation)
@@ -452,18 +682,29 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
             f"AE epoch={epoch + 1}/{epochs} train={train_metrics.get('total', 0.0):.6f} "
             f"score={validation.get('score', float('nan')):.6f} "
             f"spectrum={validation.get('spectrum_only_score', float('nan')):.6f} "
-            f"detail={detail_scale:.2f} lr={optimizer.param_groups[0]['lr']:.2e} "
+            f"stage={stage} detail={detail_scale:.2f} "
+            f"lr={optimizer.param_groups[0]['lr']:.2e} "
             f"seconds={record['elapsed_seconds']:.2f}",
             flush=True,
         )
-        if stop_at_target and validation and best_score >= target_score:
+        if (
+            stop_at_target
+            and validation
+            and best_score >= target_score
+            and (not factorized or stage == "joint")
+        ):
             stop_reason = "target_reached"
             print(
                 f"AE target reached: best score {best_score:.6f} >= {target_score:.6f}",
                 flush=True,
             )
             break
-        if patience > 0 and validation and epochs_without_improvement >= patience:
+        if (
+            patience > 0
+            and validation
+            and epochs_without_improvement >= patience
+            and (not factorized or stage == "joint")
+        ):
             stop_reason = "early_stopping"
             print(f"AE early stopping at epoch {epoch + 1}", flush=True)
             break
@@ -495,6 +736,7 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
     )
     summary = {
         "device": str(device),
+        "architecture": str(section.get("architecture", "structured_v2")),
         "parameters": count_parameters(model),
         "spectrum_latent_dim": model.spectrum_latent_dim,
         "phase_latent_dim": model.phase_latent_dim,
@@ -513,6 +755,8 @@ def train_autoencoder(config: dict, resume: bool = False) -> dict:
         "stop_reason": stop_reason,
         "training_elapsed_seconds": time.perf_counter() - training_started,
         "selection_metric": str(section.get("selection_metric", "score")),
+        "coarse_pretrain_epochs": int(section.get("coarse_pretrain_epochs", 0)),
+        "detail_pretrain_epochs": int(section.get("detail_pretrain_epochs", 0)),
         "output_dir": str(output_dir),
     }
     save_json(output_dir / "summary.json", summary)

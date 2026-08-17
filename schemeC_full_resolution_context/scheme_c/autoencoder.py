@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import nn
+import torch.nn.functional as functional
 
 from .angle_delay import ChannelShape, normalize_angle_delay
 
@@ -531,3 +532,396 @@ class MetricHighFidelityAutoencoder(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         spectrum, detail = self.encode(angle_delay)
         return self.decode(spectrum, detail), spectrum, detail
+
+
+class BalancedDetailEncoder(nn.Module):
+    """A higher-capacity detail encoder that keeps the 4x8x24 latent grid."""
+
+    def __init__(
+        self,
+        input_channels: int,
+        stem_channels: int,
+        latent_channels: int,
+        hidden_channels: int,
+        residual_blocks: int,
+    ) -> None:
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Conv3d(
+                input_channels, stem_channels, kernel_size=3, padding=1, bias=False
+            ),
+            nn.GroupNorm(_groups(stem_channels), stem_channels),
+            nn.GELU(),
+            *_deep_residual_stack(stem_channels, residual_blocks),
+            DeepDown3d(
+                stem_channels,
+                hidden_channels,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+                residual_blocks=residual_blocks,
+            ),
+            DeepDown3d(
+                hidden_channels,
+                latent_channels,
+                kernel_size=(3, 3, 4),
+                stride=(1, 1, 4),
+                padding=(1, 1, 0),
+                residual_blocks=residual_blocks,
+            ),
+        )
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return self.network(value)
+
+
+class ZeroPreservingResidual3d(nn.Module):
+    """Residual block whose exact zero input always produces exact zero output."""
+
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv3d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(_groups(channels), channels, affine=False),
+            nn.GELU(),
+            nn.Conv3d(channels, channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(_groups(channels), channels, affine=False),
+        )
+        self.activation = nn.GELU()
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return self.activation(value + self.block(value))
+
+
+class ZeroPreservingUp3d(nn.Sequential):
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: int,
+        kernel_size: int | tuple[int, int, int],
+        stride: int | tuple[int, int, int],
+        padding: int | tuple[int, int, int],
+        residual_blocks: int,
+        residual: bool = True,
+    ) -> None:
+        layers: list[nn.Module] = [
+            nn.ConvTranspose3d(
+                input_channels,
+                output_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                bias=False,
+            )
+        ]
+        if residual:
+            layers.extend(
+                [
+                    nn.GroupNorm(_groups(output_channels), output_channels, affine=False),
+                    nn.GELU(),
+                    *[
+                        ZeroPreservingResidual3d(output_channels)
+                        for _ in range(max(1, int(residual_blocks)))
+                    ],
+                ]
+            )
+        super().__init__(*layers)
+
+
+class SpectrumPowerDecoder(nn.Module):
+    """Decode the spectrum latent directly into a full-resolution log-power map."""
+
+    def __init__(
+        self,
+        latent_channels: int,
+        hidden_channels: int,
+        output_channels: int,
+        residual_blocks: int,
+    ) -> None:
+        super().__init__()
+        middle_channels = max(hidden_channels // 2, output_channels * 8)
+        self.network = nn.Sequential(
+            DeepUp3d(
+                latent_channels,
+                hidden_channels,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+                residual_blocks=residual_blocks,
+            ),
+            DeepUp3d(
+                hidden_channels,
+                middle_channels,
+                kernel_size=4,
+                stride=(2, 2, 4),
+                padding=(1, 1, 0),
+                residual_blocks=residual_blocks,
+            ),
+            DeepUp3d(
+                middle_channels,
+                output_channels,
+                kernel_size=(3, 3, 4),
+                stride=(1, 1, 2),
+                padding=(1, 1, 1),
+                residual_blocks=residual_blocks,
+                residual=False,
+            ),
+        )
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return functional.softplus(self.network(value).float())
+
+
+class ComplexResidualDecoder(nn.Module):
+    """Decode detail without an affine normalization path that can invent a template."""
+
+    def __init__(
+        self,
+        latent_channels: int,
+        hidden_channels: int,
+        output_channels: int,
+        residual_blocks: int,
+    ) -> None:
+        super().__init__()
+        self.network = nn.Sequential(
+            ZeroPreservingResidual3d(latent_channels),
+            ZeroPreservingUp3d(
+                latent_channels,
+                hidden_channels,
+                kernel_size=4,
+                stride=(2, 2, 4),
+                padding=(1, 1, 0),
+                residual_blocks=residual_blocks,
+            ),
+            ZeroPreservingUp3d(
+                hidden_channels,
+                output_channels,
+                kernel_size=(3, 3, 4),
+                stride=(1, 1, 2),
+                padding=(1, 1, 1),
+                residual_blocks=residual_blocks,
+                residual=False,
+            ),
+        )
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return self.network(value)
+
+
+class FactorizedResidualDecoder(nn.Module):
+    """Keep coarse power and complex detail isolated until the final residual sum."""
+
+    def __init__(
+        self,
+        spectrum_channels: int,
+        detail_channels: int,
+        complex_channels: int,
+        residual_blocks: int,
+        spectrum_hidden_channels: int,
+        detail_hidden_channels: int,
+        spectrum_log_scale: float,
+        detail_gain: float,
+        maximum_log_power: float,
+        envelope_floor: float,
+    ) -> None:
+        super().__init__()
+        if detail_gain <= 0.0:
+            raise ValueError("detail_gain must be positive")
+        self.complex_channels = int(complex_channels)
+        self.spectrum_log_scale = float(spectrum_log_scale)
+        self.detail_gain = float(detail_gain)
+        self.maximum_log_power = float(maximum_log_power)
+        self.envelope_floor = float(envelope_floor)
+        self.spectrum_decoder = SpectrumPowerDecoder(
+            spectrum_channels,
+            spectrum_hidden_channels,
+            complex_channels,
+            residual_blocks,
+        )
+        self.detail_decoder = ComplexResidualDecoder(
+            detail_channels,
+            detail_hidden_channels,
+            2 * complex_channels,
+            residual_blocks,
+        )
+
+    def _envelope(self, log_power: torch.Tensor) -> torch.Tensor:
+        bounded = log_power.float().clamp(0.0, self.maximum_log_power)
+        power = torch.expm1(bounded) / self.spectrum_log_scale
+        amplitude = (power + self.envelope_floor).sqrt()
+        return (
+            amplitude[:, :, None]
+            .expand(-1, -1, 2, -1, -1, -1)
+            .reshape(amplitude.shape[0], 2 * self.complex_channels, *amplitude.shape[2:])
+        )
+
+    def _coarse_template(self, envelope: torch.Tensor) -> torch.Tensor:
+        template = torch.zeros_like(envelope)
+        template[:, 0::2] = envelope[:, 0::2]
+        return normalize_angle_delay(template)
+
+    def forward(
+        self,
+        spectrum: torch.Tensor,
+        detail: torch.Tensor | None,
+        detail_scale: float = 1.0,
+    ) -> dict[str, torch.Tensor]:
+        scale = float(detail_scale)
+        if not 0.0 <= scale <= 1.0:
+            raise ValueError("detail_scale must be between 0 and 1")
+        spectrum_log_power = self.spectrum_decoder(spectrum)
+        envelope = self._envelope(spectrum_log_power)
+        coarse = self._coarse_template(envelope)
+        if detail is None or scale == 0.0:
+            residual = torch.zeros_like(coarse)
+            prediction = coarse
+        else:
+            residual = self.detail_decoder(detail).float()
+            residual = normalize_angle_delay(residual * envelope)
+            prediction = normalize_angle_delay(
+                coarse + scale * self.detail_gain * residual
+            )
+        return {
+            "prediction": prediction,
+            "coarse": coarse,
+            "detail_residual": residual,
+            "spectrum_log_power": spectrum_log_power,
+        }
+
+
+class FactorizedResidualAutoencoder(nn.Module):
+    """AE v4 with a 6,144-value power map and 24,576-value complex residual."""
+
+    def __init__(
+        self,
+        shape: ChannelShape,
+        spectrum_stem_channels: int = 32,
+        phase_stem_channels: int = 32,
+        spectrum_latent_channels: int = 64,
+        phase_latent_channels: int = 32,
+        residual_blocks: int = 3,
+        spectrum_log_scale: float = 4.0,
+        detail_hidden_channels: int = 64,
+        spectrum_decoder_channels: int = 64,
+        detail_decoder_channels: int = 64,
+        detail_gain: float = 2.0,
+        maximum_log_power: float = 12.0,
+        envelope_floor: float = 1e-4,
+    ) -> None:
+        super().__init__()
+        if shape.m_v % 4 or shape.m_h % 4 or shape.s % 16:
+            raise ValueError(
+                "M_V/M_H must be divisible by 4 and S must be divisible by 16"
+            )
+        self.shape = shape
+        self.spectrum_log_scale = float(spectrum_log_scale)
+        self.spectrum_shape = StructuredLatentShape(
+            int(spectrum_latent_channels),
+            shape.m_v // 4,
+            shape.m_h // 4,
+            shape.s // 16,
+        )
+        self.phase_shape = StructuredLatentShape(
+            int(phase_latent_channels),
+            shape.m_v // 2,
+            shape.m_h // 2,
+            shape.s // 8,
+        )
+        complex_channels = shape.ad_channels // 2
+        self.spectrum_encoder = HighFidelitySpectrumEncoder(
+            complex_channels,
+            int(spectrum_stem_channels),
+            int(spectrum_latent_channels),
+            int(residual_blocks),
+        )
+        self.phase_encoder = BalancedDetailEncoder(
+            shape.ad_channels,
+            int(phase_stem_channels),
+            int(phase_latent_channels),
+            int(detail_hidden_channels),
+            int(residual_blocks),
+        )
+        self.decoder = FactorizedResidualDecoder(
+            int(spectrum_latent_channels),
+            int(phase_latent_channels),
+            complex_channels,
+            int(residual_blocks),
+            int(spectrum_decoder_channels),
+            int(detail_decoder_channels),
+            float(spectrum_log_scale),
+            float(detail_gain),
+            float(maximum_log_power),
+            float(envelope_floor),
+        )
+
+    @property
+    def spectrum_latent_dim(self) -> int:
+        return self.spectrum_shape.elements
+
+    @property
+    def phase_latent_dim(self) -> int:
+        return self.phase_shape.elements
+
+    @property
+    def total_latent_dim(self) -> int:
+        return self.spectrum_latent_dim + self.phase_latent_dim
+
+    def spectrum_input(self, angle_delay: torch.Tensor) -> torch.Tensor:
+        batch = angle_delay.shape[0]
+        parts = angle_delay.reshape(
+            batch,
+            self.shape.m_p * self.shape.n,
+            2,
+            self.shape.m_v,
+            self.shape.m_h,
+            self.shape.s,
+        )
+        power = parts.float().square().sum(dim=2)
+        return torch.log1p(self.spectrum_log_scale * power)
+
+    def encode(
+        self, angle_delay: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        spectrum = self.spectrum_encoder(self.spectrum_input(angle_delay))
+        detail = self.phase_encoder(angle_delay)
+        return spectrum.flatten(1), detail.flatten(1)
+
+    def decode_components(
+        self,
+        spectrum_latent: torch.Tensor,
+        phase_latent: torch.Tensor | None = None,
+        detail_scale: float = 1.0,
+    ) -> dict[str, torch.Tensor]:
+        spectrum = spectrum_latent.reshape(-1, *self.spectrum_shape.tensor_shape)
+        detail = (
+            None
+            if phase_latent is None
+            else phase_latent.reshape(-1, *self.phase_shape.tensor_shape)
+        )
+        return self.decoder(spectrum, detail, detail_scale)
+
+    def decode(
+        self,
+        spectrum_latent: torch.Tensor,
+        phase_latent: torch.Tensor | None = None,
+        detail_scale: float = 1.0,
+    ) -> torch.Tensor:
+        return self.decode_components(
+            spectrum_latent, phase_latent, detail_scale
+        )["prediction"]
+
+    def set_trainable_stage(self, stage: str) -> None:
+        if stage not in {"coarse", "detail", "joint"}:
+            raise ValueError(f"Unknown autoencoder training stage: {stage}")
+        coarse_trainable = stage in {"coarse", "joint"}
+        detail_trainable = stage in {"detail", "joint"}
+        self.spectrum_encoder.requires_grad_(coarse_trainable)
+        self.decoder.spectrum_decoder.requires_grad_(coarse_trainable)
+        self.phase_encoder.requires_grad_(detail_trainable)
+        self.decoder.detail_decoder.requires_grad_(detail_trainable)
+
+    def forward(
+        self, angle_delay: torch.Tensor, detail_scale: float = 1.0
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        spectrum, detail = self.encode(angle_delay)
+        return self.decode(spectrum, detail, detail_scale), spectrum, detail

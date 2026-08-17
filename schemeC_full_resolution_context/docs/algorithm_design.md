@@ -6,10 +6,12 @@
 
 Scheme C 有两个明确目标：
 
-1. 把 AE 的“正确答案压缩后再还原”能力从已观察到的约 `0.722` 继续推向 `0.8`。
+1. 修复 AE v3 已确认的结构性失败，把 AE 的固定 Fold0 还原分数推向 `0.8`。
 2. 不再让 Context 把 30,720 维 latent 强行压成几百维，而是在完整角度-时延结构上预测，使最终 Fold0 分数向 `0.7` 靠近。
 
 `0.7` 是实验目标，不是代码能够预先保证的结果。是否达到目标必须以固定 Fold0 验证集的 PAS、PDP、NMSE 和 Score 为准。
+
+失败权重的实测 AE Score 是 `0.2567`。旧资料中出现的 `0.722` 是 Spatial U-Net 的标准化 latent MSE 指标，不是独立 Fold0 的 AE 比赛 Score；当前能复现的旧 AE 独立 Fold0 Score 约为 `0.478`。因此本文不把 `0.722` 当作已经达到过的 AE 基线。
 
 ## 2. 为什么重做 Context
 
@@ -29,7 +31,7 @@ Scheme C 改为：每个角度-时延位置都是一个 token，每个 token 单
 ```mermaid
 flowchart LR
     A["训练信道"] --> B["角度-时延变换"]
-    B --> C["AE v3 双分辨率编码"]
+    B --> C["AE v4 隔离式双分支编码"]
     C --> D["Spectrum 64x2x4x12"]
     C --> E["Detail 32x4x8x24"]
     F["用户坐标和基站"] --> G["几何与 Fourier 特征"]
@@ -67,7 +69,7 @@ flowchart LR
 - 两个基站共同的角度-时延规律可以迁移。
 - 基站差异仍可通过 embedding、相对坐标、距离和方位角表达。
 
-## 5. AE v3 设计
+## 5. AE v4 失败驱动重构
 
 ### 5.1 输入变换
 
@@ -85,26 +87,83 @@ flowchart LR
 
 降维不是一层完成。编码器通过多层 3D 卷积逐步改变空间尺寸和通道数，保持局部结构；解码器也分多层逐步恢复。Detail 分支保留的角度和时延网格比 Spectrum 更密，避免所有高频细节都挤在低分辨率网格里。
 
-### 5.3 AE 优化点
+### 5.3 v3 为什么失败
 
-- 更深的 3D 残差块，正式配置为每级 3 个残差单元。
-- Spectrum 和 Detail 使用不同分辨率，而不是完全相同的压缩路径。
-- Detail 先暖启动，再逐步增加到完整权重，防止训练初期细节噪声破坏 Spectrum 主体。
-- 损失直接包含 PAS、PDP、NMSE、联合功率和复数相干性，而不只优化普通均方误差。
-- 每次验证同时报告完整 AE 分数和 `spectrum_only_score`，可以判断 Detail 到底带来增益还是干扰。
-- 使用验证分数选择 `best.pt`，而不是固定认为最后一个 epoch 最好。
+失败包给出的不是猜测，而是下面这些实测结果：
 
-### 5.4 AE 是否达到目标的判定
+| 证据 | 测量结果 | 通俗含义 |
+| --- | ---: | --- |
+| 完整 AE Score | `0.2567` | 还原能力本身就不合格 |
+| 完整减去 Detail 置零 | `+0.0011` | 24,576 维细节几乎没被使用 |
+| Detail 在融合前后的相对影响 | `106% -> 2.96% -> 2.34%` | 细节进入共享融合层后被粗略分支淹没 |
+| `detail_scale=0.1` 与 `1.0` 输出差异 | 约 `3.8e-6` | GroupNorm 抵消了所谓渐进课程学习 |
+| 固定 decoder 优化 latent | 50 步后约 `0.264` | decoder 本身表达或条件也有问题 |
+| 训练集与验证集 | 都约 `0.25` | 不是单纯验证集太难，而是严重欠拟合 |
+
+另一个问题是容量分配：v3 的 Spectrum encoder 约 270 万参数，Detail encoder 只有约 45 万参数，但 Detail 却占总 latent 的 80%。这相当于给“细节主力”分配了更大的答题纸，却只给了很小的处理网络。
+
+### 5.4 v4 解码器怎么改
+
+v4 不再把两个分支拼接后送入共享 `fusion`。它们直到最终输出前都保持隔离：
+
+1. Spectrum decoder 只从 6,144 维 latent 恢复完整角度-时延功率包络。
+2. Detail decoder 从 24,576 维 latent 恢复复数残差。
+3. 两个分支分别做能量归一化，避免任一分支靠数值幅度压住另一分支。
+4. 最后一层使用明确的 `coarse + detail_gain * residual` 合成，正式配置 `detail_gain=2.0`。
+
+Detail decoder 中的归一化关闭 affine，卷积没有 bias。因此零 Detail latent 严格产生零残差，不会像 v3 那样从零输入学出一张固定模板。`detail_scale` 也改到所有归一化之后作用于最终残差，所以 `0.1` 与 `1.0` 确实表示 10% 和 100% 的残差贡献。
+
+正式配置仍保持原 latent 形状，但提高细节网络容量。当前 AE 总参数约 852 万，细节编码器和解码器合计约 395 万，不再是 v3 的小分支。
+
+### 5.5 损失如何改
+
+Spectrum 只拥有功率输入，不能凭空知道复数相位。v3 却让 Spectrum-only 路径承担复数 NMSE 和相干性目标，这会把它训练成平均复数模板，并污染 Detail 路径。v4 的 Spectrum 辅助目标只包括：
+
+- 完整角度-时延 log-power 重建。
+- 角度边缘功率重建。
+- 时延边缘功率重建。
+
+完整输出才优化 PAS、PDP、NMSE、联合功率、全局复数相干性。新增逐 angle-delay bin 的能量加权复数方向损失，直接告诉 Detail 每个非零位置的实部/虚部方向应该是什么。
+
+### 5.6 真正的三阶段训练
+
+正式 Fold0 不再缩放进入 GroupNorm 之前的 latent，而是切换可训练模块：
+
+| 阶段 | epoch | 可训练模块 | 目标 |
+| --- | ---: | --- | --- |
+| Coarse | 1-8 | Spectrum encoder/decoder | 先学功率轮廓 |
+| Detail | 9-20 | Detail encoder/decoder | 固定粗略分支，单独学复数残差 |
+| Joint | 21 起 | 全部 AE | 按比赛指标联合微调 |
+
+学习率平台调度和早停只在 Joint 阶段生效，避免模型刚从 Coarse 切换到 Detail 时被旧阶段的低分提前降学习率。正式初始学习率从 v3 的 `2e-4` 提高到 `8e-4`；失败包中的单样本实验已经证明 `1e-3` 比 `2e-4` 明显更能降低欠拟合，但 `8e-4` 是否最优仍需 Fold0 验证。
+
+### 5.7 AE 是否达到目标的判定
 
 AE 验证使用真实验证信道作为输入，然后立即编码、解码。这个分数不包含坐标预测误差，因此近似代表后续 Context 的表示上限。
 
-重点看：
+训练结束后自动生成：
 
 - `artifacts/fold0/autoencoder/evaluation.json` 中的 `metrics.score`。
-- `metrics.spectrum_only_score` 与完整 `metrics.score` 的差值。
-- PAS、PDP、NMSE 是否同时改善，而不是只提升一个指标。
+- `ablation.json` 中完整、去掉 Detail、打乱 Detail 三组结果。
+- `quality_gate.json` 中每一项是否通过。
 
-如果 AE 仍低于 `0.8`，不能宣称 AE 问题已经解决。如果 AE 达到 `0.8` 而 Context 只有 `0.55`，下一步资源应优先投入 Context。
+只有同时满足以下条件才允许开始 Context：
+
+- AE Score 不低于 `0.75`。
+- 完整输出相对去掉 Detail 至少提升 `0.10`。
+- 打乱 Detail 后至少下降 `0.05`。
+
+`0.75` 是“允许继续”的工程门槛，`0.8` 仍是 AE 目标。如果 AE 未过门槛，`run_fold0.sh` 会退出并保留诊断文件，不会继续消耗数小时训练 Context。如果 AE 达到 `0.8` 而 Context 仍只有 `0.55`，下一步资源才应优先投入 Context。
+
+### 5.8 正式训练前的容量证明
+
+Fold0 泛化分数低可能有两种原因：模型连训练样本都记不住，或者模型能记住但不能泛化。为先排除第一种，提供独立容量测试：
+
+```bash
+bash scripts/run_ae_capacity_gates.sh
+```
+
+它先让新 AE 故意记住 1 条样本，再记住固定 32 条样本。默认硬条件是 1 条达到 `0.90`、32 条达到 `0.85`。这不是正式验证分数，也不能证明泛化；它只回答“这套 30,720 维表示和 decoder 有没有足够能力表达答案”。任一项失败时应先修 AE，不应直接开始数小时 Fold0。
 
 ## 6. Context 输入如何整理
 
@@ -205,9 +264,11 @@ full_latent_linear_layers = []
 full_resolution_check   = true
 ```
 
-当前实测参数量约为：
+当前实测参数量为：
 
-- AE：5,239,632。
+- AE：8,527,112。
+- Spectrum encoder/decoder：2,707,264 / 1,871,624。
+- Detail encoder/decoder：2,148,032 / 1,800,192。
 - Context：6,053,636。
 - Context 最大 Linear 权重只有 131,072 个参数，即 `512×256`，远小于旧式 `512×30720` 输出头。
 
@@ -314,8 +375,8 @@ artifacts/fold0/joint/outage_scan.json
 
 | 文件 | 职责 |
 | --- | --- |
-| `scheme_c/autoencoder.py` | AE v3 双分辨率编码器和解码器 |
-| `scheme_c/autoencoder_training.py` | AE 损失、验证、早停和限时 |
+| `scheme_c/autoencoder.py` | AE v4 隔离功率/复数残差编码器和解码器 |
+| `scheme_c/autoencoder_training.py` | 三阶段 AE 损失、验证、早停和限时 |
 | `scheme_c/encoding.py` | 生成结构化 latent 和归一化统计 |
 | `scheme_c/context_data.py` | 双基站数据、几何、走廊坐标和混合遮挡 |
 | `scheme_c/context_model.py` | 多尺度环境、全分辨率注意力和 refiner |
@@ -324,3 +385,6 @@ artifacts/fold0/joint/outage_scan.json
 | `configs/fold0_5090.json` | 5090 Fold0 正式验证配置 |
 | `configs/final_5090.json` | 全量最终训练模板 |
 | `configs/smoke.json` | 极小样本链路验证配置 |
+| `scripts/overfit_autoencoder.py` | 1/32 样本 AE 容量证明 |
+| `scripts/evaluate_ae_ablation.py` | 完整、去细节、乱序细节消融 |
+| `scripts/check_ae_gate.py` | AE 未达门槛时阻止 Context 启动 |

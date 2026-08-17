@@ -11,12 +11,17 @@ from scheme_c.angle_delay import (
     channel_to_angle_delay,
 )
 from scheme_c.autoencoder import (
+    FactorizedResidualAutoencoder,
     MetricHighFidelityAutoencoder,
     StructuredAngleDelayAutoencoder,
 )
+from scheme_c.autoencoder_training import autoencoder_training_stage
 from scheme_c.context_model import CellTokenPool, FullResolutionContextField
 from scheme_c.data import balanced_limit
-from scheme_c.losses import complex_coherence_loss
+from scheme_c.losses import (
+    complex_coherence_loss,
+    energy_weighted_complex_direction_loss,
+)
 from scheme_c.metrics import (
     cosine_accuracy,
     nmse,
@@ -84,6 +89,67 @@ class AngleDelayTests(unittest.TestCase):
         self.assertTrue(gradients)
         self.assertTrue(all(torch.isfinite(gradient).all() for gradient in gradients))
 
+    def test_factorized_residual_autoencoder_keeps_detail_effective(self) -> None:
+        torch.manual_seed(5)
+        model = FactorizedResidualAutoencoder(
+            self.shape,
+            spectrum_stem_channels=4,
+            phase_stem_channels=4,
+            spectrum_latent_channels=4,
+            phase_latent_channels=2,
+            residual_blocks=1,
+            detail_hidden_channels=4,
+            spectrum_decoder_channels=4,
+            detail_decoder_channels=4,
+        )
+        value = torch.randn(1, *self.shape.ad_shape)
+        output, spectrum, detail = model(value)
+        coarse = model.decode(spectrum, None)
+        weak_detail = model.decode(spectrum, detail, detail_scale=0.1)
+        zero_latent = torch.zeros(1, *model.phase_shape.tensor_shape)
+        zero_decoded = model.decoder.detail_decoder(zero_latent)
+
+        self.assertEqual(output.shape, value.shape)
+        self.assertEqual(model.spectrum_shape.tensor_shape, (4, 1, 2, 1))
+        self.assertEqual(model.phase_shape.tensor_shape, (2, 2, 4, 2))
+        self.assertEqual(float(zero_decoded.detach().abs().max()), 0.0)
+        self.assertGreater(
+            float((output - coarse).detach().square().mean()), 1e-3
+        )
+        self.assertGreater(
+            float((output - weak_detail).detach().square().mean()), 1e-3
+        )
+
+        loss = (output - value).square().mean()
+        loss.backward()
+        detail_gradients = [
+            parameter.grad
+            for parameter in model.decoder.detail_decoder.parameters()
+            if parameter.grad is not None
+        ]
+        self.assertTrue(detail_gradients)
+        self.assertTrue(all(torch.isfinite(gradient).all() for gradient in detail_gradients))
+        self.assertGreater(
+            sum(float(gradient.abs().sum()) for gradient in detail_gradients), 0.0
+        )
+
+        model.set_trainable_stage("coarse")
+        self.assertTrue(next(model.spectrum_encoder.parameters()).requires_grad)
+        self.assertFalse(next(model.phase_encoder.parameters()).requires_grad)
+        model.set_trainable_stage("detail")
+        self.assertFalse(next(model.spectrum_encoder.parameters()).requires_grad)
+        self.assertTrue(next(model.phase_encoder.parameters()).requires_grad)
+        model.set_trainable_stage("joint")
+        self.assertTrue(all(parameter.requires_grad for parameter in model.parameters()))
+
+    def test_factorized_training_stage_boundaries(self) -> None:
+        section = {"coarse_pretrain_epochs": 2, "detail_pretrain_epochs": 3}
+        self.assertEqual(autoencoder_training_stage(section, 0), "coarse")
+        self.assertEqual(autoencoder_training_stage(section, 1), "coarse")
+        self.assertEqual(autoencoder_training_stage(section, 2), "detail")
+        self.assertEqual(autoencoder_training_stage(section, 4), "detail")
+        self.assertEqual(autoencoder_training_stage(section, 5), "joint")
+
     def test_metric_cosine_is_stable_for_tiny_and_zero_rows(self) -> None:
         prediction = torch.tensor(
             [[1e-20, 2e-20, 0.0], [0.0, 0.0, 0.0]], requires_grad=True
@@ -105,6 +171,16 @@ class AngleDelayTests(unittest.TestCase):
         )
         self.assertAlmostEqual(
             float(complex_coherence_loss(-target, target)), 2.0, places=6
+        )
+        self.assertAlmostEqual(
+            float(energy_weighted_complex_direction_loss(target, target, self.shape)),
+            0.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            float(energy_weighted_complex_direction_loss(-target, target, self.shape)),
+            2.0,
+            places=6,
         )
 
 

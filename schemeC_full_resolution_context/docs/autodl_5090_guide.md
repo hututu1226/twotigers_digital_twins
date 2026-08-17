@@ -214,13 +214,38 @@ bash scripts/run_smoke.sh --device cuda 2>&1 | tee logs/smoke.log
 
 成功标准：
 
-- 10 项单元测试全部 `OK`。
+- 12 项单元测试全部 `OK`。
 - 最后 JSON 中出现 `"status": "PASS"`。
 - 输出 shape 是 `[2,256,4,192]`。
 - dtype 是 `complex64`。
 - `full_resolution_check` 是 `true`。
 
 本地 CPU 已真实跑通该冒烟链路；云端仍必须再跑一次，因为 CUDA、驱动和 AMP 环境不同。
+
+### 7.1 再跑 AE 容量门槛
+
+冒烟只证明“代码不报错”，不能证明模型有能力还原信道。正式 Fold0 前先执行：
+
+```bash
+set -o pipefail
+bash scripts/run_ae_capacity_gates.sh 2>&1 | tee logs/ae_capacity.log
+```
+
+脚本会做两个故意过拟合实验：
+
+1. 固定 1 条训练样本训练 200 step，要求 Score 至少 `0.90`。
+2. 固定 32 条训练样本训练 1200 step，要求 Score 至少 `0.85`。
+
+成功后应看到两个 JSON 的 `status` 都是 `PASS`：
+
+```text
+artifacts/capacity/one_sample.json
+artifacts/capacity/thirty_two_samples.json
+```
+
+这两个分数是训练集容量证明，不是 Fold0 泛化分数。它们的用途类似“先确认学生能把 32 道练习题学会”，不能据此宣称“陌生考试也能得高分”。任一项失败都不要开始正式 Fold0，应先把日志和两个 JSON 打包回来分析。
+
+5090/5090D 的工程预估为约 10 到 40 分钟，实际以日志中 step 用时为准。第一次运行建议人工观察；容量测试通过后再启动无人值守正式训练。
 
 ## 8. 正式运行 Fold0
 
@@ -256,14 +281,25 @@ tmux attach -t schemeC_fold0
 `run_fold0.sh` 按顺序执行：
 
 1. 预处理双基站位置和点云 BEV。
-2. 训练 AE v3。
-3. 编码训练集，写入 30,720 维结构化 latent。
-4. 训练全分辨率 Context。
-5. Joint 微调 Context 和 AE decoder。
-6. 分别评价 AE、Context、Joint。
-7. 生成 `stage_gap.json`。
-8. 扫描 outage 阈值。
-9. 生成 500 条 Fold0 测试信道并检查格式。
+2. 用 Coarse、Detail、Joint 三阶段训练 AE v4。
+3. 评价 AE，并运行“去掉 Detail、打乱 Detail”消融。
+4. 检查 AE Score、Detail 增益和乱序下降三个硬门槛。
+5. 只有 AE 门槛通过后，才编码 30,720 维结构化 latent。
+6. 训练全分辨率 Context。
+7. Joint 微调 Context 和 AE decoder。
+8. 分别评价 Context、Joint并生成 `stage_gap.json`。
+9. 扫描 outage 阈值。
+10. 生成 500 条 Fold0 测试信道并检查格式。
+
+如果门槛失败，脚本会在第 4 步退出，明确打印 `Context training was not started`。这是预期保护，不是流水线故障。
+
+如果目录中还存在旧 AE v3 的 `last.pt`，启动脚本会先检查 checkpoint 内记录的架构。发现与 v4 不兼容时，会把整个旧目录重命名为类似：
+
+```text
+artifacts/fold0_archived_metric_high_fidelity_v3_YYYYMMDD_HHMMSS/
+```
+
+然后从 v4 重新训练。旧结果只是归档，不会被删除；但 v3 不能通过 `RESUME=1` 续成 v4，因为两者网络参数含义和形状不同。
 
 ### 8.3 为什么配置有 500 epoch 却不会盲目跑 500 次
 
@@ -271,11 +307,11 @@ tmux attach -t schemeC_fold0
 
 - 验证集早停。
 - 验证平台自动降低学习率。
-- AE 最多约 2.25 小时。
-- Context 最多约 3.75 小时。
+- AE 最多约 3.0 小时。
+- Context 最多约 3.25 小时。
 - Joint 最多约 0.5 小时。
 
-三个训练阶段合计约 6.5 小时，剩余时间留给预处理、编码、验证、推理和打包。时间在 epoch 结束后检查，因此可能多出一个 epoch 的时间。
+三个训练阶段上限合计约 6.75 小时，剩余时间留给预处理、编码、验证、推理和打包。时间在 epoch 结束后检查，因此可能多出一个 epoch 的时间。容量测试建议在正式 8 小时 Fold0 计时前单独完成。
 
 ### 8.4 预计用时
 
@@ -284,12 +320,12 @@ tmux attach -t schemeC_fold0
 | 阶段 | 5090/5090D 预计 |
 | --- | ---: |
 | 预处理 | 2 到 10 分钟 |
-| AE v3 | 1.3 到 2.3 小时 |
+| AE v4 | 2.0 到 3.1 小时 |
 | 全集 latent 编码 | 3 到 12 分钟 |
-| Full-resolution Context | 2.5 到 3.8 小时 |
+| Full-resolution Context | 2.5 到 3.4 小时 |
 | Joint | 20 到 35 分钟 |
 | 三阶段验证、阈值扫描、500 条推理 | 15 到 50 分钟 |
-| 合计 | 约 5 到 8 小时 |
+| 合计 | 约 5.5 到 8 小时 |
 
 Scheme C 比旧 Context 慢的主要原因不是参数更多，而是 96 个 Spectrum 位置和 768 个 Detail 位置都要对同基站观测用户做学习型注意力。计算量随“latent 位置数 × 查询用户数 × 观测用户数”增长。
 
@@ -447,7 +483,9 @@ cat configs/final_selected.json
 - 读取 Fold0 最佳 outage threshold。
 - 生成 `configs/final_selected.json`。
 
-全量训练使用全部 4000 条训练样本，不再留 Fold0。它按 Fold0 选出的 epoch 数训练，而不是在没有验证集的情况下假装早停；同时仍保留 2.25/3.75/0.5 小时的分阶段上限，避免单次租卡失控。
+`prepare_final_config.py` 会先读取 `artifacts/fold0/autoencoder/quality_gate.json`。只要 AE 门槛不是 `PASS`，它就拒绝生成最终配置，避免把不合格 AE 扩大到全量训练。
+
+全量训练使用全部 4000 条训练样本，不再留 Fold0。它按 Fold0 选出的 epoch 数训练，而不是在没有验证集的情况下假装早停；同时仍保留 3.0/3.25/0.5 小时的分阶段上限，避免单次租卡失控。
 
 ## 15. 运行全量最终训练
 
@@ -565,7 +603,7 @@ ps -ef | grep -E 'train_|infer.py|run_fold0|run_final' | grep -v grep
 
 AutoDL 官方支持在任务后执行 `/usr/bin/shutdown` 自动关机；对于按量实例，关机即停止 GPU 实例计费。仅关闭 SSH、手机投屏或浏览器页面不会关机。第二天仍建议到控制台确认实例状态确实为“已关机”。
 
-如果需要在睡觉期间自动完成 Fold0、全量训练、推理、打包并关机，请直接使用 [夜间自动流水线教程](overnight_autorun.md)。该脚本会验证产物后调用 AutoDL 官方推荐的 `/usr/bin/shutdown`。
+如果需要在睡觉期间自动训练、打包并关机，请使用 [夜间自动流水线教程](overnight_autorun.md)。为满足单次约 8 小时预算，默认 `PIPELINE_MODE=fold0`，第二个租卡时段再使用 `PIPELINE_MODE=final`；脚本验证产物后才调用 `/usr/bin/shutdown`。
 
 ## 19. 后续从 GitHub 更新代码
 

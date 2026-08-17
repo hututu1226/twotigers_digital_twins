@@ -12,6 +12,8 @@ if [[ ! -f artifacts/preprocessed_scheme_c/manifest.json ]]; then
   python scripts/preprocess.py --config "$CONFIG"
 fi
 
+python scripts/ensure_run_compatibility.py --config "$CONFIG" --run final
+
 if [[ "${RESUME:-0}" == "1" && -f artifacts/final/autoencoder/last.pt ]]; then
   python scripts/train_autoencoder.py --config "$CONFIG" --resume
 else

@@ -11,7 +11,10 @@ evidence.
 
 ## Key properties
 
-- AE v3 uses a `6,144`-element spectrum branch and `24,576`-element detail branch.
+- AE v4 keeps a `6,144`-element power branch and an isolated `24,576`-element
+  complex-detail branch; neither branch is flattened into a small global vector.
+- Formal training uses coarse/detail/joint stages and an AE quality gate. Context
+  is not started below `0.75` AE Score or when detail ablations show collapse.
 - Context never performs `30,720 -> hundreds -> 30,720` global compression.
 - Every angle-delay latent bin attends to all available users from its serving BS.
 - Both BSs share one backbone and use a learned station embedding.
@@ -23,6 +26,7 @@ evidence.
 ## Documents
 
 - [Detailed algorithm design](docs/algorithm_design.md)
+- [AE v4 failure analysis and redesign evidence](docs/ae_v4_failure_driven_redesign.md)
 - [AutoDL 5090 operating guide](docs/autodl_5090_guide.md)
 - [Overnight training and automatic shutdown](docs/overnight_autorun.md)
 
@@ -39,6 +43,17 @@ python scripts/inspect_architecture.py --config configs/fold0_5090.json
 
 The smoke test must end with `"status": "PASS"` and produce a complex64 NPY
 file with shape `[2, 256, 4, 192]`.
+
+Before spending hours on Fold0, run the deliberate 1-sample and 32-sample AE
+capacity checks on the 5090:
+
+```bash
+set -o pipefail
+bash scripts/run_ae_capacity_gates.sh 2>&1 | tee logs/ae_capacity.log
+```
+
+These checks must pass before the formal run. They prove training-set capacity,
+not validation generalization.
 
 ## Formal Fold0 run
 

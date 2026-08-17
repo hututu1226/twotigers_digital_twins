@@ -6,6 +6,7 @@ SHUTDOWN_ON_SUCCESS="${SHUTDOWN_ON_SUCCESS:-1}"
 SHUTDOWN_ON_FAILURE="${SHUTDOWN_ON_FAILURE:-1}"
 CONFIRM_AUTODL_SHUTDOWN="${CONFIRM_AUTODL_SHUTDOWN:-NO}"
 BACKUP_DIR="${BACKUP_DIR:-/root/autodl-fs}"
+PIPELINE_MODE="${PIPELINE_MODE:-fold0}"
 MASTER_LOG="$PROJECT_DIR/logs/overnight_pipeline.log"
 STATUS_FILE="$PROJECT_DIR/logs/overnight_status.txt"
 NO_SHUTDOWN_FILE="$PROJECT_DIR/NO_AUTO_SHUTDOWN"
@@ -13,6 +14,11 @@ CURRENT_STAGE="initialization"
 
 cd "$PROJECT_DIR"
 mkdir -p logs
+
+if [[ "$PIPELINE_MODE" != "fold0" && "$PIPELINE_MODE" != "final" && "$PIPELINE_MODE" != "all" ]]; then
+    printf 'PIPELINE_MODE must be fold0, final, or all; got %s\n' "$PIPELINE_MODE" >&2
+    exit 2
+fi
 
 exec 9>logs/overnight_pipeline.lock
 if ! flock -n 9; then
@@ -65,6 +71,11 @@ failure_backup() {
     tar --ignore-failed-read -czf "$archive" \
         logs configs \
         artifacts/fold0/autoencoder/summary.json \
+        artifacts/fold0/autoencoder/evaluation.json \
+        artifacts/fold0/autoencoder/ablation.json \
+        artifacts/fold0/autoencoder/quality_gate.json \
+        artifacts/capacity/one_sample.json \
+        artifacts/capacity/thirty_two_samples.json \
         artifacts/fold0/context/summary.json \
         artifacts/fold0/joint/summary.json \
         artifacts/final/autoencoder/summary.json \
@@ -108,15 +119,62 @@ if [[ ! -x /usr/bin/shutdown ]]; then
     exit 2
 fi
 
-write_status "RUNNING" "overnight pipeline started"
-log "Scheme C overnight pipeline started in $PROJECT_DIR"
+write_status "RUNNING" "overnight pipeline started in mode=$PIPELINE_MODE"
+log "Scheme C overnight pipeline started in $PROJECT_DIR mode=$PIPELINE_MODE"
 
-CURRENT_STAGE="fold0 verification/training"
-if python scripts/verify_completion.py --stage fold0 >/dev/null 2>&1; then
-    log "Existing Fold0 artifacts passed verification; skipping Fold0 retraining"
-else
-    run_logged env RESUME=1 bash scripts/run_fold0.sh
+CURRENT_STAGE="CUDA and data preflight"
+run_logged python scripts/check_environment.py \
+    --config configs/fold0_5090.json --require-cuda
+
+if [[ "$PIPELINE_MODE" == "fold0" || "$PIPELINE_MODE" == "all" ]]; then
+    CURRENT_STAGE="AE capacity gates"
+    if python scripts/verify_completion.py --stage capacity >/dev/null 2>&1; then
+        log "Existing AE capacity reports passed; skipping capacity retraining"
+    else
+        run_logged bash scripts/run_ae_capacity_gates.sh
+    fi
+    run_logged python scripts/verify_completion.py \
+        --stage capacity --output artifacts/capacity/completion_report.json
+
+    CURRENT_STAGE="fold0 verification/training"
+    if python scripts/verify_completion.py --stage fold0 >/dev/null 2>&1; then
+        log "Existing Fold0 artifacts passed verification; skipping Fold0 retraining"
+    else
+        run_logged env RESUME=1 bash scripts/run_fold0.sh
+    fi
+    run_logged python scripts/verify_completion.py \
+        --stage fold0 --output artifacts/fold0/completion_report.json
 fi
+
+if [[ "$PIPELINE_MODE" == "fold0" ]]; then
+    CURRENT_STAGE="fold0 packaging"
+    run_logged bash scripts/package_fold0.sh
+    shopt -s nullglob
+    fold_archives=(schemeC_fold0_*.tar.gz)
+    if (( ${#fold_archives[@]} == 0 )); then
+        log "No Scheme C Fold0 archive was produced"
+        false
+    fi
+    latest_archive="${fold_archives[0]}"
+    for candidate in "${fold_archives[@]:1}"; do
+        if [[ "$candidate" -nt "$latest_archive" ]]; then
+            latest_archive="$candidate"
+        fi
+    done
+    tar -tzf "$latest_archive" >/dev/null
+    sha256sum -c "${latest_archive}.sha256"
+    copy_to_file_storage "$latest_archive"
+    CURRENT_STAGE="complete"
+    write_status "SUCCESS" "capacity gates and Fold0 archive verified"
+    log "SUCCESS: Scheme C capacity gates and Fold0 completed"
+    log "Fold0 archive: $latest_archive"
+    if [[ "$SHUTDOWN_ON_SUCCESS" == "1" ]]; then
+        shutdown_instance "Fold0 pipeline success"
+    fi
+    exit 0
+fi
+
+CURRENT_STAGE="required Fold0 verification"
 run_logged python scripts/verify_completion.py \
     --stage fold0 --output artifacts/fold0/completion_report.json
 
@@ -152,7 +210,7 @@ copy_to_file_storage "$latest_archive"
 
 CURRENT_STAGE="complete"
 write_status "SUCCESS" "final model, 500-sample test channel and archive verified"
-log "SUCCESS: Scheme C Fold0, full-data training, inference and packaging completed"
+log "SUCCESS: Scheme C final training, inference and packaging completed (mode=$PIPELINE_MODE)"
 log "Final output: outputs/final/Round2_Test_Channel.npy"
 log "Result archive: $latest_archive"
 

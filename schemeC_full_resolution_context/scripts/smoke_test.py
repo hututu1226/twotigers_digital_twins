@@ -33,7 +33,7 @@ def main() -> None:
         preprocess_dataset(config, force=args.force_preprocess)
     else:
         print("[1/6] preprocessing already exists", flush=True)
-    print("[2/6] metric-aligned high-fidelity AE v3", flush=True)
+    print("[2/6] factorized residual AE v4", flush=True)
     autoencoder = train_autoencoder(config)
     print("[3/6] latent encoding", flush=True)
     encoding = encode_training_set(config)

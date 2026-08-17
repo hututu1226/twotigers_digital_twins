@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "huawei-scheme-c-full-resolution-context"
-version = "0.2.0"
-description = "High-fidelity angle-delay AE with a full-resolution latent context field"
+version = "0.3.0"
+description = "Factorized residual angle-delay AE with a full-resolution latent context field"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.26,<3",
