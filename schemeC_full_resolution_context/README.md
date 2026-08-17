@@ -24,6 +24,7 @@ evidence.
 
 - [Detailed algorithm design](docs/algorithm_design.md)
 - [AutoDL 5090 operating guide](docs/autodl_5090_guide.md)
+- [Overnight training and automatic shutdown](docs/overnight_autorun.md)
 
 ## Quick verification
 

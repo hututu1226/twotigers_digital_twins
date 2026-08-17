@@ -14,3 +14,6 @@ schemeC_source_*.zip
 schemeC_source_*.zip.sha256
 schemeC_fold0_*.tar.gz
 schemeC_fold0_*.tar.gz.sha256
+schemeC_failure_*.tar.gz
+schemeC_failure_*.tar.gz.sha256
+NO_AUTO_SHUTDOWN

@@ -74,11 +74,15 @@ optional=(
   artifacts/fold0/joint/evaluation.json
   artifacts/fold0/joint/outage_scan.json
   artifacts/fold0/stage_gap.json
+  artifacts/fold0/completion_report.json
   artifacts/final/autoencoder/summary.json
   artifacts/final/context/summary.json
   artifacts/final/joint/summary.json
+  artifacts/final/completion_report.json
   logs/fold0.log
   logs/final.log
+  logs/overnight_pipeline.log
+  logs/overnight_launcher.log
 )
 
 files=("${required[@]}")

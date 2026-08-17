@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+SHUTDOWN_ON_SUCCESS="${SHUTDOWN_ON_SUCCESS:-1}"
+SHUTDOWN_ON_FAILURE="${SHUTDOWN_ON_FAILURE:-1}"
+CONFIRM_AUTODL_SHUTDOWN="${CONFIRM_AUTODL_SHUTDOWN:-NO}"
+BACKUP_DIR="${BACKUP_DIR:-/root/autodl-fs}"
+MASTER_LOG="$PROJECT_DIR/logs/overnight_pipeline.log"
+STATUS_FILE="$PROJECT_DIR/logs/overnight_status.txt"
+NO_SHUTDOWN_FILE="$PROJECT_DIR/NO_AUTO_SHUTDOWN"
+CURRENT_STAGE="initialization"
+
+cd "$PROJECT_DIR"
+mkdir -p logs
+
+exec 9>logs/overnight_pipeline.lock
+if ! flock -n 9; then
+    printf 'Another overnight Scheme C pipeline is already running.\n' >&2
+    exit 1
+fi
+
+log() {
+    printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$MASTER_LOG"
+}
+
+write_status() {
+    local state="$1"
+    local message="$2"
+    printf 'state=%s\nstage=%s\ntime=%s\nmessage=%s\n' \
+        "$state" "$CURRENT_STAGE" "$(date --iso-8601=seconds)" "$message" \
+        > "$STATUS_FILE"
+}
+
+shutdown_instance() {
+    local reason="$1"
+    if [[ -f "$NO_SHUTDOWN_FILE" ]]; then
+        log "Automatic shutdown cancelled by $NO_SHUTDOWN_FILE"
+        return 0
+    fi
+    if [[ "$CONFIRM_AUTODL_SHUTDOWN" != "YES" ]]; then
+        log "Automatic shutdown skipped: CONFIRM_AUTODL_SHUTDOWN is not YES"
+        return 0
+    fi
+    log "Syncing files before AutoDL shutdown: $reason"
+    sync
+    sleep 5
+    /usr/bin/shutdown
+}
+
+copy_to_file_storage() {
+    local archive="$1"
+    if [[ -d "$BACKUP_DIR" && -w "$BACKUP_DIR" ]]; then
+        log "Copying result archive to $BACKUP_DIR"
+        cp -f "$archive" "${archive}.sha256" "$BACKUP_DIR/"
+        sync
+        log "Persistent backup copied to $BACKUP_DIR"
+    else
+        log "File storage is not mounted/writable; archive remains in $PROJECT_DIR"
+    fi
+}
+
+failure_backup() {
+    local archive="schemeC_failure_$(date '+%Y%m%d_%H%M%S').tar.gz"
+    tar --ignore-failed-read -czf "$archive" \
+        logs configs \
+        artifacts/fold0/autoencoder/summary.json \
+        artifacts/fold0/context/summary.json \
+        artifacts/fold0/joint/summary.json \
+        artifacts/final/autoencoder/summary.json \
+        artifacts/final/context/summary.json \
+        artifacts/final/joint/summary.json \
+        2>/dev/null || true
+    if [[ -s "$archive" ]]; then
+        sha256sum "$archive" > "${archive}.sha256" || true
+        copy_to_file_storage "$archive" || true
+        log "Failure diagnostics saved to $archive"
+    fi
+}
+
+on_error() {
+    local status=$?
+    local line="${BASH_LINENO[0]:-unknown}"
+    trap - ERR
+    set +e
+    log "ERROR at stage=$CURRENT_STAGE line=$line status=$status"
+    write_status "FAILED" "command failed at line $line with status $status"
+    failure_backup
+    if [[ "$SHUTDOWN_ON_FAILURE" == "1" ]]; then
+        shutdown_instance "pipeline failure"
+    fi
+    exit "$status"
+}
+trap on_error ERR
+
+run_logged() {
+    log "START: $CURRENT_STAGE"
+    "$@" 2>&1 | tee -a "$MASTER_LOG"
+    log "DONE: $CURRENT_STAGE"
+}
+
+if [[ "$CONFIRM_AUTODL_SHUTDOWN" != "YES" ]]; then
+    log "WARNING: this run will not shut down unless CONFIRM_AUTODL_SHUTDOWN=YES"
+fi
+if [[ ! -x /usr/bin/shutdown ]]; then
+    log "ERROR: /usr/bin/shutdown is unavailable; refusing to start unattended work"
+    write_status "FAILED" "shutdown command is unavailable"
+    exit 2
+fi
+
+write_status "RUNNING" "overnight pipeline started"
+log "Scheme C overnight pipeline started in $PROJECT_DIR"
+
+CURRENT_STAGE="fold0 verification/training"
+if python scripts/verify_completion.py --stage fold0 >/dev/null 2>&1; then
+    log "Existing Fold0 artifacts passed verification; skipping Fold0 retraining"
+else
+    run_logged env RESUME=1 bash scripts/run_fold0.sh
+fi
+run_logged python scripts/verify_completion.py \
+    --stage fold0 --output artifacts/fold0/completion_report.json
+
+CURRENT_STAGE="final config selection"
+run_logged python scripts/prepare_final_config.py
+
+CURRENT_STAGE="4000-sample final training and inference"
+if python scripts/verify_completion.py --stage final >/dev/null 2>&1; then
+    log "Existing final artifacts passed verification; skipping final retraining"
+else
+    run_logged env RESUME=1 bash scripts/run_final.sh
+fi
+run_logged python scripts/verify_completion.py \
+    --stage final --output artifacts/final/completion_report.json
+
+CURRENT_STAGE="result packaging"
+run_logged bash scripts/package_results.sh
+shopt -s nullglob
+archives=(schemeC_results_*.tar.gz)
+if (( ${#archives[@]} == 0 )); then
+    log "No Scheme C result archive was produced"
+    false
+fi
+latest_archive="${archives[0]}"
+for candidate in "${archives[@]:1}"; do
+    if [[ "$candidate" -nt "$latest_archive" ]]; then
+        latest_archive="$candidate"
+    fi
+done
+tar -tzf "$latest_archive" >/dev/null
+sha256sum -c "${latest_archive}.sha256"
+copy_to_file_storage "$latest_archive"
+
+CURRENT_STAGE="complete"
+write_status "SUCCESS" "final model, 500-sample test channel and archive verified"
+log "SUCCESS: Scheme C Fold0, full-data training, inference and packaging completed"
+log "Final output: outputs/final/Round2_Test_Channel.npy"
+log "Result archive: $latest_archive"
+
+if [[ "$SHUTDOWN_ON_SUCCESS" == "1" ]]; then
+    shutdown_instance "pipeline success"
+fi

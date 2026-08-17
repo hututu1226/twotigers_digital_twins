@@ -563,7 +563,9 @@ schemeC_results_YYYYMMDD_HHMMSS.tar.gz.sha256
 ps -ef | grep -E 'train_|infer.py|run_fold0|run_final' | grep -v grep
 ```
 
-最后到 AutoDL 网页控制台点击关机/停止实例。仅关闭 SSH、手机投屏或浏览器页面通常不会停止计费；终端内执行 Linux `shutdown` 是否停止平台计费也不能替代控制台状态确认。
+AutoDL 官方支持在任务后执行 `/usr/bin/shutdown` 自动关机；对于按量实例，关机即停止 GPU 实例计费。仅关闭 SSH、手机投屏或浏览器页面不会关机。第二天仍建议到控制台确认实例状态确实为“已关机”。
+
+如果需要在睡觉期间自动完成 Fold0、全量训练、推理、打包并关机，请直接使用 [夜间自动流水线教程](overnight_autorun.md)。该脚本会验证产物后调用 AutoDL 官方推荐的 `/usr/bin/shutdown`。
 
 ## 19. 后续从 GitHub 更新代码
 
