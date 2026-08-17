@@ -1,0 +1,16 @@
+artifacts/
+outputs/
+logs/
+incoming/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+configs/final_selected.json
+schemeC_results_*.tar.gz
+schemeC_results_*.tar.gz.sha256
+schemeC_source_*.tar.gz
+schemeC_source_*.tar.gz.sha256
+schemeC_source_*.zip
+schemeC_source_*.zip.sha256
+schemeC_fold0_*.tar.gz
+schemeC_fold0_*.tar.gz.sha256
