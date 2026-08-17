@@ -2,7 +2,7 @@
 
 ## 1. 直接结论
 
-可以让 Scheme C 无人值守训练、校验、打包并自动关闭 AutoDL 实例。考虑单次最多约 8 小时，默认分成两个租卡时段：第一晚跑 AE 容量门槛和 Fold0，第二晚跑 4000 条全量训练和最终测试集。
+可以让 Scheme C 无人值守训练、校验、打包并自动关闭 AutoDL 实例。当前排查 AE 时优先使用独立的 `ae` 模式；确认 AE 合格以后，再分别运行完整 Fold0 和 4000 条全量训练。
 
 可以把它理解成洗衣机的预约程序：不是每隔一分钟猜衣服是否洗完，而是“洗涤程序正常结束并检查排水”后才进入漂洗。这里对应关系是：
 
@@ -30,8 +30,9 @@ AutoDL 官方说明：
 
 ## 3. 脚本会做什么
 
-`scripts/run_overnight_pipeline.sh` 支持三种模式：
+`scripts/run_overnight_pipeline.sh` 支持四种模式：
 
+- `PIPELINE_MODE=ae`：验证已有容量结果，只训练正式 Fold0 AE，评估、打包并关机，不启动 Context。
 - `PIPELINE_MODE=fold0`：默认模式，容量测试、Fold0、打包、关机。
 - `PIPELINE_MODE=final`：要求已有合格 Fold0，全量训练、推理、打包、关机。
 - `PIPELINE_MODE=all`：连续做前两项，可能超过 8 小时，不推荐受限时使用。
@@ -52,12 +53,15 @@ Final 模式会先重新验证 Fold0 和 AE 门槛，再生成 `final_selected.j
 
 任一步失败时，脚本会写入失败状态、打包诊断日志，并默认关机，避免你睡觉时实例空转。
 
+`ae` 模式与完整 Fold0 的关键区别是：AE 质量门槛不通过不算自动化故障。脚本仍会把 `best.pt`、`last.pt`、完整验证指标、Detail 消融和日志打成分析包，然后正常关机；它绝不会继续启动 Context。
+
 ## 4. 从头执行需要多久
 
 若当前只完成了冒烟测试，总共需要两套训练：
 
 | 部分 | 5090/5090D 工程预估 |
 | --- | ---: |
+| 已通过容量门槛后，只跑正式 AE、评估和打包 | 约 2.2 到 3.6 小时 |
 | 容量门槛 + Fold0 训练、评测、推理 | 约 5.5 到 8 小时 |
 | 4000 条全量最终训练和推理 | 约 5 到 8 小时 |
 | 总计 | 约 10 到 16 小时 |
@@ -66,7 +70,61 @@ Final 模式会先重新验证 Fold0 和 AE 门槛，再生成 `final_selected.j
 
 这是预估，不是保证。实际时间受 5090/5090D 型号、PyTorch SDPA、地图尺寸和验证次数影响。
 
-## 5. 今晚直接执行的命令
+## 5. 当前只训练 AE 并自动关机
+
+适用于已经完成容量测试、需要离开电脑的情况。先更新代码：
+
+```bash
+cd /root/autodl-tmp/twotigers_digital_twins
+git switch 0817_schemeC
+git pull origin 0817_schemeC
+cd schemeC_full_resolution_context
+```
+
+确认容量结果仍然有效：
+
+```bash
+python scripts/verify_completion.py --stage capacity
+```
+
+必须看到最后的 `"status": "PASS"`。然后一键启动：
+
+```bash
+bash scripts/launch_ae_autoshutdown.sh
+```
+
+启动器会完成以下操作：
+
+1. 再次拒绝无效容量结果，并确认 `/usr/bin/shutdown` 存在。
+2. 使用 `nohup` 在后台启动 `PIPELINE_MODE=ae`。
+3. 训练或从兼容的 `last.pt` 续训正式 Fold0 AE。
+4. 使用 `best.pt` 计算完整验证分数和 Detail 消融。
+5. 无论质量门槛是 `PASS` 还是 `FAIL`，都生成 AE 分析包并校验 SHA256。
+6. 如果 `/root/autodl-fs` 已挂载且可写，再复制一份持久化备份。
+7. 成功、模型质量不达标或程序异常时均自动关机。
+
+启动成功时会打印 `AE automation started successfully` 和后台 PID。此后可以关闭 SSH，不需要保持网页或手机在线。
+
+离开前建议等待约 30 秒，再执行一次：
+
+```bash
+cat logs/overnight_status.txt
+tail -n 30 logs/overnight_pipeline.log
+ps -fp "$(cat logs/overnight.pid)"
+```
+
+应看到 `state=RUNNING`，并且日志已经进入环境检查、预处理或 AE 训练。只要不再执行其他训练命令，就可以离开。
+
+完成后的文件名为：
+
+```text
+schemeC_ae_analysis_PASS_YYYYMMDD_HHMMSS.tar.gz
+schemeC_ae_analysis_PASS_YYYYMMDD_HHMMSS.tar.gz.sha256
+```
+
+如果 AE 没通过质量门槛，文件名中的 `PASS` 会变成 `FAIL`。这里表示模型质量门槛，不表示脚本或压缩包损坏。
+
+## 6. 完整 Fold0 或最终训练的命令
 
 先进入项目并更新分支：
 
@@ -138,7 +196,7 @@ echo $! > logs/overnight.pid
 
 Final 模式会拒绝使用未通过 AE 质量门槛的 Fold0，不需要手工判断文件是否齐全。
 
-## 6. 睡觉前建议再确认四件事
+## 7. 睡觉前建议再确认四件事
 
 ```bash
 nvidia-smi
@@ -154,7 +212,7 @@ tail -n 30 logs/overnight_pipeline.log
 - `/usr/bin/shutdown` 存在。
 - 日志正在增长，没有立即报错。
 
-## 7. 如何查看当前进行到哪一步
+## 8. 如何查看当前进行到哪一步
 
 查看简短状态：
 
@@ -177,7 +235,7 @@ tail -n 100 -f logs/overnight_pipeline.log
 
 如果实例已经自动关机，需要从 AutoDL 控制台以无卡模式或正常模式重新开机，再查看日志和下载结果。
 
-## 8. 两个阶段的结果在哪里
+## 9. 各阶段的结果在哪里
 
 Fold0 模式成功后核心文件为：
 
@@ -190,9 +248,19 @@ schemeC_fold0_YYYYMMDD_HHMMSS.tar.gz
 schemeC_fold0_YYYYMMDD_HHMMSS.tar.gz.sha256
 ```
 
-Final 模式成功后核心文件为：
+AE 模式完成后核心文件为：
 
-成功后核心文件为：
+```text
+artifacts/fold0/autoencoder/best.pt
+artifacts/fold0/autoencoder/evaluation.json
+artifacts/fold0/autoencoder/ablation.json
+artifacts/fold0/autoencoder/quality_gate.json
+artifacts/fold0/autoencoder/completion_report.json
+schemeC_ae_analysis_PASS或FAIL_YYYYMMDD_HHMMSS.tar.gz
+schemeC_ae_analysis_PASS或FAIL_YYYYMMDD_HHMMSS.tar.gz.sha256
+```
+
+Final 模式成功后核心文件为：
 
 ```text
 outputs/final/Round2_Test_Channel.npy
@@ -220,7 +288,7 @@ stage=complete
 
 若没有挂载文件存储，压缩包保留在 `/root/autodl-tmp` 的项目目录。AutoDL 官方说明关机后实例数据仍保留，但本地盘不是冗余存储，重新开机后仍应尽快下载结果包。
 
-## 9. 失败时会发生什么
+## 10. 失败时会发生什么
 
 默认命令设置了 `SHUTDOWN_ON_FAILURE=1`。任一步失败后会：
 
@@ -240,7 +308,7 @@ ls -lh schemeC_failure_*.tar.gz*
 
 如果你宁愿失败后保持实例开机方便立即排错，可以把启动参数改为 `SHUTDOWN_ON_FAILURE=0`。这会增加无人监控时继续计费的风险，不推荐晚上睡觉时使用。
 
-## 10. 临时取消自动关机
+## 11. 临时取消自动关机
 
 脚本运行期间创建下面的标志文件：
 
@@ -256,7 +324,7 @@ touch NO_AUTO_SHUTDOWN
 rm -f NO_AUTO_SHUTDOWN
 ```
 
-## 11. 人工停止整条流水线
+## 12. 人工停止整条流水线
 
 先禁止自动关机，再终止后台脚本：
 
@@ -273,6 +341,6 @@ ps -ef | grep -E 'train_autoencoder|train_context|finetune_joint|run_overnight' 
 
 如果仍有训练进程，需要单独结束。仅杀掉外层脚本不一定会自动结束已经启动的 Python 子进程。
 
-## 12. 最重要的限制
+## 13. 最重要的限制
 
 自动关机只能控制费用和流程，不能保证最终 Score 达到 0.7。脚本能证明的是：训练按配置完成、输出格式正确、结果已保存和校验。算法准确率仍必须查看 Fold0 的真实 PAS、PDP、NMSE 和 Score。

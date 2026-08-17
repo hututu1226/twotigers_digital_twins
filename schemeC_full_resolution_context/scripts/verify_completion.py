@@ -185,10 +185,69 @@ def verify_capacity(project: Path) -> dict:
     return reports
 
 
+def verify_ae(project: Path) -> dict:
+    root = project / "artifacts" / "fold0" / "autoencoder"
+    result = verify_stage(
+        project / "artifacts" / "fold0", "autoencoder", require_best=True
+    )
+    summary = read_json(root / "summary.json")
+    if summary.get("architecture") != "factorized_residual_v4":
+        raise ValueError("Fold0 AE analysis uses an old architecture")
+    latent_elements = int(summary.get("spectrum_latent_dim", 0)) + int(
+        summary.get("phase_latent_dim", 0)
+    )
+    if latent_elements != 30720:
+        raise ValueError(
+            f"Fold0 AE has {latent_elements} latent elements; expected 30720"
+        )
+
+    evaluation = verify_evaluation(root / "evaluation.json")
+    ablation = read_json(root / "ablation.json")
+    detail_gain = float(ablation["detail_gain"])
+    shuffle_drop = float(ablation["shuffle_drop"])
+    if not math.isfinite(detail_gain) or not math.isfinite(shuffle_drop):
+        raise ValueError("Fold0 AE ablation contains non-finite measurements")
+
+    gate = read_json(root / "quality_gate.json")
+    gate_status = str(gate.get("status", ""))
+    if gate_status not in {"PASS", "FAIL", "SKIPPED"}:
+        raise ValueError(f"Invalid Fold0 AE quality gate status: {gate_status}")
+    expected_allowed = gate_status in {"PASS", "SKIPPED"}
+    if bool(gate.get("context_training_allowed")) != expected_allowed:
+        raise ValueError("Fold0 AE quality gate continuation flag is inconsistent")
+    measurements = gate.get("measurements", {})
+    comparisons = {
+        "score": (float(measurements["score"]), evaluation["score"]),
+        "detail_gain": (float(measurements["detail_gain"]), detail_gain),
+        "shuffle_drop": (float(measurements["shuffle_drop"]), shuffle_drop),
+    }
+    for name, (reported, measured) in comparisons.items():
+        if not math.isfinite(reported) or abs(reported - measured) > 1e-6:
+            raise ValueError(
+                f"Fold0 AE gate {name}={reported} does not match evaluation {measured}"
+            )
+
+    result.update(
+        {
+            "summary": summary,
+            "evaluation": evaluation,
+            "ablation": {
+                "detail_gain": detail_gain,
+                "shuffle_drop": shuffle_drop,
+            },
+            "quality_gate": gate,
+            "total_latent_elements": latent_elements,
+        }
+    )
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify that a Scheme C run is complete")
     parser.add_argument(
-        "--stage", choices=("smoke", "capacity", "fold0", "final"), required=True
+        "--stage",
+        choices=("smoke", "capacity", "ae", "fold0", "final"),
+        required=True,
     )
     parser.add_argument(
         "--project", default=str(Path(__file__).resolve().parents[1])
@@ -201,6 +260,8 @@ def main() -> None:
             details = verify_smoke(project)
         elif args.stage == "capacity":
             details = verify_capacity(project)
+        elif args.stage == "ae":
+            details = verify_ae(project)
         elif args.stage == "fold0":
             details = verify_fold0(project)
         else:

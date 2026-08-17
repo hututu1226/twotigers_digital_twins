@@ -15,8 +15,8 @@ CURRENT_STAGE="initialization"
 cd "$PROJECT_DIR"
 mkdir -p logs
 
-if [[ "$PIPELINE_MODE" != "fold0" && "$PIPELINE_MODE" != "final" && "$PIPELINE_MODE" != "all" ]]; then
-    printf 'PIPELINE_MODE must be fold0, final, or all; got %s\n' "$PIPELINE_MODE" >&2
+if [[ "$PIPELINE_MODE" != "ae" && "$PIPELINE_MODE" != "fold0" && "$PIPELINE_MODE" != "final" && "$PIPELINE_MODE" != "all" ]]; then
+    printf 'PIPELINE_MODE must be ae, fold0, final, or all; got %s\n' "$PIPELINE_MODE" >&2
     exit 2
 fi
 
@@ -71,6 +71,11 @@ failure_backup() {
     tar --ignore-failed-read -czf "$archive" \
         logs configs \
         artifacts/fold0/autoencoder/summary.json \
+        artifacts/fold0/autoencoder/history.jsonl \
+        artifacts/fold0/autoencoder/resolved_config.json \
+        artifacts/fold0/autoencoder/best.pt \
+        artifacts/fold0/autoencoder/last.pt \
+        artifacts/fold0/autoencoder/final.pt \
         artifacts/fold0/autoencoder/evaluation.json \
         artifacts/fold0/autoencoder/ablation.json \
         artifacts/fold0/autoencoder/quality_gate.json \
@@ -126,7 +131,7 @@ CURRENT_STAGE="CUDA and data preflight"
 run_logged python scripts/check_environment.py \
     --config configs/fold0_5090.json --require-cuda
 
-if [[ "$PIPELINE_MODE" == "fold0" || "$PIPELINE_MODE" == "all" ]]; then
+if [[ "$PIPELINE_MODE" == "ae" || "$PIPELINE_MODE" == "fold0" || "$PIPELINE_MODE" == "all" ]]; then
     CURRENT_STAGE="AE capacity gates"
     if python scripts/verify_completion.py --stage capacity >/dev/null 2>&1; then
         log "Existing AE capacity reports passed; skipping capacity retraining"
@@ -136,6 +141,101 @@ if [[ "$PIPELINE_MODE" == "fold0" || "$PIPELINE_MODE" == "all" ]]; then
     run_logged python scripts/verify_completion.py \
         --stage capacity --output artifacts/capacity/completion_report.json
 
+fi
+
+if [[ "$PIPELINE_MODE" == "ae" ]]; then
+    CURRENT_STAGE="AE preprocessing"
+    if [[ ! -f artifacts/preprocessed_scheme_c/manifest.json ]]; then
+        run_logged python scripts/preprocess.py --config configs/fold0_5090.json
+    else
+        log "Existing preprocessing manifest found; skipping preprocessing"
+    fi
+
+    CURRENT_STAGE="AE checkpoint compatibility"
+    run_logged python scripts/ensure_run_compatibility.py \
+        --config configs/fold0_5090.json --run fold0
+
+    CURRENT_STAGE="formal Fold0 AE training"
+    if python scripts/verify_completion.py --stage ae >/dev/null 2>&1; then
+        log "Existing formal AE analysis passed artifact verification; skipping retraining"
+    else
+        rm -f \
+            artifacts/fold0/autoencoder/evaluation.json \
+            artifacts/fold0/autoencoder/ablation.json \
+            artifacts/fold0/autoencoder/quality_gate.json \
+            artifacts/fold0/autoencoder/completion_report.json
+        if [[ -f artifacts/fold0/autoencoder/last.pt ]]; then
+            run_logged python scripts/train_autoencoder.py \
+                --config configs/fold0_5090.json --resume
+        else
+            run_logged python scripts/train_autoencoder.py \
+                --config configs/fold0_5090.json
+        fi
+
+        CURRENT_STAGE="AE full validation"
+        run_logged python scripts/evaluate.py \
+            --config configs/fold0_5090.json \
+            --stage autoencoder \
+            --checkpoint artifacts/fold0/autoencoder/best.pt \
+            --output artifacts/fold0/autoencoder/evaluation.json
+
+        CURRENT_STAGE="AE detail ablation"
+        run_logged python scripts/evaluate_ae_ablation.py \
+            --config configs/fold0_5090.json \
+            --checkpoint artifacts/fold0/autoencoder/best.pt \
+            --output artifacts/fold0/autoencoder/ablation.json
+
+        CURRENT_STAGE="AE quality gate"
+        log "START: $CURRENT_STAGE"
+        gate_exit=0
+        if python scripts/check_ae_gate.py \
+            --config configs/fold0_5090.json \
+            --evaluation artifacts/fold0/autoencoder/evaluation.json \
+            --ablation artifacts/fold0/autoencoder/ablation.json \
+            --output artifacts/fold0/autoencoder/quality_gate.json \
+            2>&1 | tee -a "$MASTER_LOG"; then
+            log "DONE: $CURRENT_STAGE (PASS)"
+        else
+            gate_exit=$?
+            log "DONE: $CURRENT_STAGE (model gate did not pass, status=$gate_exit; packaging analysis instead of starting Context)"
+        fi
+    fi
+
+    CURRENT_STAGE="AE artifact verification"
+    run_logged python scripts/verify_completion.py \
+        --stage ae \
+        --output artifacts/fold0/autoencoder/completion_report.json
+
+    CURRENT_STAGE="AE analysis packaging"
+    run_logged bash scripts/package_ae_analysis.sh
+    shopt -s nullglob
+    ae_archives=(schemeC_ae_analysis_*.tar.gz)
+    if (( ${#ae_archives[@]} == 0 )); then
+        log "No Scheme C AE analysis archive was produced"
+        false
+    fi
+    latest_archive="${ae_archives[0]}"
+    for candidate in "${ae_archives[@]:1}"; do
+        if [[ "$candidate" -nt "$latest_archive" ]]; then
+            latest_archive="$candidate"
+        fi
+    done
+    tar -tzf "$latest_archive" >/dev/null
+    sha256sum -c "${latest_archive}.sha256"
+    copy_to_file_storage "$latest_archive"
+    gate_status="$(python -c "import json; print(json.load(open('artifacts/fold0/autoencoder/quality_gate.json'))['status'])")"
+
+    CURRENT_STAGE="complete"
+    write_status "SUCCESS" "formal AE analysis archived; quality_gate=$gate_status"
+    log "SUCCESS: formal Scheme C AE analysis completed; quality_gate=$gate_status"
+    log "AE analysis archive: $latest_archive"
+    if [[ "$SHUTDOWN_ON_SUCCESS" == "1" ]]; then
+        shutdown_instance "AE analysis pipeline complete (quality_gate=$gate_status)"
+    fi
+    exit 0
+fi
+
+if [[ "$PIPELINE_MODE" == "fold0" || "$PIPELINE_MODE" == "all" ]]; then
     CURRENT_STAGE="fold0 verification/training"
     if python scripts/verify_completion.py --stage fold0 >/dev/null 2>&1; then
         log "Existing Fold0 artifacts passed verification; skipping Fold0 retraining"
