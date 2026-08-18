@@ -44,7 +44,7 @@ def main() -> None:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     root = config_path.parent.parent
     results = []
-    for name in ("autoencoder", "context", "joint"):
+    for name in ("autoencoder", "context"):
         if name not in config:
             continue
         output = Path(config[name]["output_dir"])

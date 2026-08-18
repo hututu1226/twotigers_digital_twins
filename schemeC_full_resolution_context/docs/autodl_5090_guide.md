@@ -1,5 +1,7 @@
 # Scheme C 在 AutoDL 5090 上的完整运行教程
 
+> **旧版教程，请勿按其中的 Context/Joint 命令运行。** Context V2 已取消单独 Joint 阶段，当前唯一有效的完整教程是 [`context_v2_autodl.md`](context_v2_autodl.md)。本文仅保留 AE v4 历史排查过程供复盘。
+
 ## 1. 先说明要完成什么
 
 本教程覆盖以下完整流程：

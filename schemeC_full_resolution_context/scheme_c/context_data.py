@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from .data import load_manifest, load_metadata
 from .spatial_grid import GridSpec, wrap_degrees
+
+
+@dataclass(frozen=True)
+class SpatialMaskSample:
+    """A training query subset and every observation hidden around it."""
+
+    targets: np.ndarray
+    hidden: np.ndarray
+    pattern: str
+    guard_meters: float
 
 
 class ContextRepository:
@@ -35,6 +46,8 @@ class ContextRepository:
         self._load_static_maps()
         self.spectrum_z = self._normalize_latent("spectrum")
         self.phase_z = self._normalize_latent("phase")
+        self.encoded.pop("spectrum_latent", None)
+        self.encoded.pop("phase_latent", None)
         self.spectrum_shape = self._latent_shape("spectrum", self.spectrum_z.shape[1])
         self.phase_shape = self._latent_shape("phase", self.phase_z.shape[1])
         self.power_z = self._normalize_power()
@@ -48,6 +61,7 @@ class ContextRepository:
             ]
             for cell_id in range(self.cell_count)
         ]
+        self.test_component_templates = self._build_test_component_templates()
 
     @property
     def spectrum_latent_dim(self) -> int:
@@ -93,7 +107,52 @@ class ContextRepository:
         values = self.encoded[f"{prefix}_latent"].astype(np.float32)
         mean = self.encoded[f"{prefix}_mean"].astype(np.float32)
         standard_deviation = self.encoded[f"{prefix}_std"].astype(np.float32)
+        if mean.ndim == 2:
+            cells = self.metadata["train_cells"]
+            normalized = np.empty_like(values)
+            for cell_id in range(len(mean)):
+                selected = cells == cell_id
+                normalized[selected] = (
+                    values[selected] - mean[cell_id]
+                ) / standard_deviation[cell_id]
+            return normalized
         return ((values - mean) / standard_deviation).astype(np.float32)
+
+    def _build_test_component_templates(self) -> list[list[np.ndarray]]:
+        link_meters = float(
+            self.config["preprocessing"].get("test_component_link_meters", 6.0)
+        )
+        templates: list[list[np.ndarray]] = []
+        for cell_id in range(self.cell_count):
+            selected = np.flatnonzero(
+                self.metadata["test_cells"] == cell_id
+            ).astype(np.int64)
+            positions = self.metadata["test_positions"][selected, :2].astype(np.float32)
+            if not len(positions):
+                templates.append([])
+                continue
+            distance = np.linalg.norm(
+                positions[:, None, :] - positions[None, :, :], axis=2
+            )
+            adjacency = distance <= link_meters
+            remaining = set(range(len(positions)))
+            cell_templates: list[np.ndarray] = []
+            while remaining:
+                seed = remaining.pop()
+                component = [seed]
+                frontier = [seed]
+                while frontier:
+                    current = frontier.pop()
+                    linked = np.flatnonzero(adjacency[current]).tolist()
+                    unseen = [index for index in linked if index in remaining]
+                    for index in unseen:
+                        remaining.remove(index)
+                    frontier.extend(unseen)
+                    component.extend(unseen)
+                points = positions[np.asarray(component, dtype=np.int64)]
+                cell_templates.append((points - points.mean(axis=0)).astype(np.float32))
+            templates.append(cell_templates)
+        return templates
 
     def _latent_shape(self, prefix: str, expected_elements: int) -> tuple[int, int, int, int]:
         key = f"{prefix}_shape"
@@ -238,11 +297,41 @@ class ContextRepository:
         maximum_targets: int,
         outage_anchor_probability: float = 0.25,
     ) -> np.ndarray:
+        return self.sample_spatial_mask(
+            rng,
+            cell_id,
+            minimum_meters,
+            maximum_meters,
+            minimum_targets,
+            maximum_targets,
+            outage_anchor_probability,
+            test_template_probability=0.0,
+            template_radius_meters=3.0,
+            guard_min_meters=0.0,
+            guard_max_meters=0.0,
+        ).targets
+
+    def sample_spatial_mask(
+        self,
+        rng: np.random.Generator,
+        cell_id: int,
+        minimum_meters: float,
+        maximum_meters: float,
+        minimum_targets: int,
+        maximum_targets: int,
+        outage_anchor_probability: float = 0.25,
+        test_template_probability: float = 0.65,
+        template_radius_meters: float = 3.0,
+        guard_min_meters: float = 3.5,
+        guard_max_meters: float = 8.5,
+    ) -> SpatialMaskSample:
+        """Hide a complete test-like region while supervising a bounded target subset."""
         candidates = self.indices_by_cell[int(cell_id)]
         positions = self.metadata["train_positions"][candidates, :2]
         selected = np.empty(0, dtype=np.int64)
         anchor = int(candidates[0])
         outage_candidates = candidates[self.metadata["outage"][candidates]]
+        pattern = "fallback"
         for _ in range(64):
             anchor_pool = (
                 outage_candidates
@@ -251,40 +340,86 @@ class ContextRepository:
             )
             anchor = int(anchor_pool[rng.integers(len(anchor_pool))])
             center = self.metadata["train_positions"][anchor, :2]
-            width = rng.uniform(minimum_meters, maximum_meters)
-            height = rng.uniform(minimum_meters, maximum_meters)
-            delta = positions - center
-            shape_kind = int(rng.integers(4))
-            if shape_kind == 0:
-                mask = (
-                    (np.abs(delta[:, 0]) <= width / 2.0)
-                    & (np.abs(delta[:, 1]) <= height / 2.0)
+            templates = self.test_component_templates[int(cell_id)]
+            use_template = bool(templates) and rng.random() < test_template_probability
+            if use_template:
+                template = templates[int(rng.integers(len(templates)))]
+                angle = rng.uniform(0.0, 2.0 * np.pi)
+                scale = rng.uniform(0.85, 1.15)
+                rotation = np.asarray(
+                    [
+                        [np.cos(angle), -np.sin(angle)],
+                        [np.sin(angle), np.cos(angle)],
+                    ],
+                    dtype=np.float32,
                 )
-            elif shape_kind == 1:
-                normalized = (delta[:, 0] / (width / 2.0)) ** 2 + (
-                    delta[:, 1] / (height / 2.0)
-                ) ** 2
-                mask = normalized <= 1.0
-            elif shape_kind == 2:
-                angle = rng.uniform(0.0, np.pi)
-                along = delta[:, 0] * np.cos(angle) + delta[:, 1] * np.sin(angle)
-                across = -delta[:, 0] * np.sin(angle) + delta[:, 1] * np.cos(angle)
-                mask = (np.abs(along) <= width) & (np.abs(across) <= height / 4.0)
+                transformed = (template @ rotation.T) * scale + center
+                distance = np.linalg.norm(
+                    positions[:, None, :] - transformed[None, :, :], axis=2
+                )
+                mask = distance.min(axis=1) <= template_radius_meters
+                pattern = "test_component"
             else:
-                second_center = center + rng.normal(0.0, maximum_meters / 4.0, size=2)
-                second_delta = positions - second_center
-                first = (delta[:, 0] / (width / 2.0)) ** 2 + (
-                    delta[:, 1] / (height / 2.0)
-                ) ** 2 <= 1.0
-                second = (second_delta[:, 0] / (height / 2.0)) ** 2 + (
-                    second_delta[:, 1] / (width / 2.0)
-                ) ** 2 <= 1.0
-                mask = first | second
+                width = rng.uniform(minimum_meters, maximum_meters)
+                height = rng.uniform(minimum_meters, maximum_meters)
+                delta = positions - center
+                shape_kind = int(rng.integers(4))
+                if shape_kind == 0:
+                    mask = (
+                        (np.abs(delta[:, 0]) <= width / 2.0)
+                        & (np.abs(delta[:, 1]) <= height / 2.0)
+                    )
+                    pattern = "rectangle"
+                elif shape_kind == 1:
+                    normalized = (delta[:, 0] / (width / 2.0)) ** 2 + (
+                        delta[:, 1] / (height / 2.0)
+                    ) ** 2
+                    mask = normalized <= 1.0
+                    pattern = "ellipse"
+                elif shape_kind == 2:
+                    angle = rng.uniform(0.0, np.pi)
+                    along = delta[:, 0] * np.cos(angle) + delta[:, 1] * np.sin(angle)
+                    across = -delta[:, 0] * np.sin(angle) + delta[:, 1] * np.cos(angle)
+                    mask = (np.abs(along) <= width) & (
+                        np.abs(across) <= height / 4.0
+                    )
+                    pattern = "corridor"
+                else:
+                    second_center = center + rng.normal(
+                        0.0, maximum_meters / 4.0, size=2
+                    )
+                    second_delta = positions - second_center
+                    first = (delta[:, 0] / (width / 2.0)) ** 2 + (
+                        delta[:, 1] / (height / 2.0)
+                    ) ** 2 <= 1.0
+                    second = (second_delta[:, 0] / (height / 2.0)) ** 2 + (
+                        second_delta[:, 1] / (width / 2.0)
+                    ) ** 2 <= 1.0
+                    mask = first | second
+                    pattern = "compound"
             selected = candidates[mask]
             if len(selected) >= minimum_targets:
                 break
         if not len(selected):
             selected = np.asarray([anchor], dtype=np.int64)
-        if len(selected) > maximum_targets:
-            selected = rng.choice(selected, size=maximum_targets, replace=False)
-        return np.sort(selected.astype(np.int64))
+        hidden = selected.astype(np.int64, copy=True)
+        targets = hidden
+        if len(targets) > maximum_targets:
+            targets = rng.choice(targets, size=maximum_targets, replace=False)
+            if anchor in hidden and anchor not in targets:
+                targets[0] = anchor
+        guard_low = max(0.0, float(guard_min_meters))
+        guard_high = max(guard_low, float(guard_max_meters))
+        guard = float(rng.uniform(guard_low, guard_high)) if guard_high > 0 else 0.0
+        if guard > 0.0 and len(targets):
+            target_positions = self.metadata["train_positions"][targets, :2]
+            nearest_target = np.linalg.norm(
+                positions[:, None, :] - target_positions[None, :, :], axis=2
+            ).min(axis=1)
+            hidden = np.union1d(hidden, candidates[nearest_target < guard])
+        return SpatialMaskSample(
+            targets=np.sort(targets.astype(np.int64)),
+            hidden=np.sort(hidden.astype(np.int64)),
+            pattern=pattern,
+            guard_meters=guard,
+        )

@@ -73,15 +73,25 @@ def generate_test_channels(
     power_std = torch.from_numpy(repository.encoded["power_std"]).to(device)
     for start in range(0, len(selected), decode_batch_size):
         stop = min(start + decode_batch_size, len(selected))
+        cell_tensor = torch.from_numpy(cells[start:stop]).to(device=device, dtype=torch.long)
+        local_spectrum_mean = (
+            spectrum_mean[cell_tensor] if spectrum_mean.ndim == 2 else spectrum_mean
+        )
+        local_spectrum_std = (
+            spectrum_std[cell_tensor] if spectrum_std.ndim == 2 else spectrum_std
+        )
+        local_phase_mean = phase_mean[cell_tensor] if phase_mean.ndim == 2 else phase_mean
+        local_phase_std = phase_std[cell_tensor] if phase_std.ndim == 2 else phase_std
         spectrum = (
-            torch.from_numpy(outputs["spectrum"][start:stop]).to(device) * spectrum_std
-            + spectrum_mean
+            torch.from_numpy(outputs["spectrum"][start:stop]).to(device)
+            * local_spectrum_std
+            + local_spectrum_mean
         )
         phase = (
-            torch.from_numpy(outputs["phase"][start:stop]).to(device) * phase_std
-            + phase_mean
+            torch.from_numpy(outputs["phase"][start:stop]).to(device)
+            * local_phase_std
+            + local_phase_mean
         )
-        cell_tensor = torch.from_numpy(cells[start:stop]).to(device=device, dtype=torch.long)
         normalized_power = torch.from_numpy(outputs["power"][start:stop]).to(device)
         log_power = normalized_power * power_std[cell_tensor] + power_mean[cell_tensor]
         prediction_shape = autoencoder.decode(spectrum, phase)

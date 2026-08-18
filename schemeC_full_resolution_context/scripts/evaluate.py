@@ -29,7 +29,7 @@ from scheme_c.data import (
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate Scheme C on its fixed spatial fold")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--stage", choices=("autoencoder", "context", "joint"), required=True)
+    parser.add_argument("--stage", choices=("autoencoder", "context"), required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument(
         "--split", choices=("validation", "train"), default="validation"

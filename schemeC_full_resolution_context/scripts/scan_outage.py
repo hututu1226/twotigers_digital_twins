@@ -25,7 +25,7 @@ def main() -> None:
         "--thresholds",
         nargs="*",
         type=float,
-        default=[0.9, 0.95, 0.97, 0.99, 0.999, 0.999999],
+        default=[0.2, 0.4, 0.6, 0.75, 0.85, 0.92, 0.97, 0.99, 0.999],
     )
     args = parser.parse_args()
     config = load_config(args.config)
@@ -71,7 +71,7 @@ def main() -> None:
         device,
         bool(config["runtime"].get("amp", True)),
         args.thresholds,
-        int(config["joint"].get("validation_decode_batch_size", 8)),
+        int(config["context"].get("validation_decode_batch_size", 8)),
     )
     reports = []
     for threshold, metrics in zip(args.thresholds, metrics_by_threshold):

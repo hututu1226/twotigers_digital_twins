@@ -92,11 +92,19 @@ def metric_aligned_channel_losses(
     target: torch.Tensor,
     shape: ChannelShape,
 ) -> dict[str, torch.Tensor]:
-    return {
+    channel_nmse = nmse(prediction, target)
+    losses = {
         "pas": 1.0 - pas_accuracy(prediction, target, shape),
         "pdp": 1.0 - pdp_accuracy(prediction, target),
-        "nmse": torch.log1p(nmse(prediction, target)),
+        "nmse": torch.log1p(channel_nmse),
     }
+    # This term is exactly 1 - official_score, including the bounded NMSE term.
+    losses["score"] = (
+        0.4 * losses["pas"]
+        + 0.4 * losses["pdp"]
+        + 0.2 * channel_nmse / (1.0 + channel_nmse)
+    )
+    return losses
 
 
 def weighted_sum(terms: dict[str, torch.Tensor], weights: dict[str, float]) -> torch.Tensor:

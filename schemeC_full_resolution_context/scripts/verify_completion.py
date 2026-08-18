@@ -74,13 +74,20 @@ def verify_encoded(path: Path, expected_total: int | None) -> dict:
     with np.load(path) as source:
         spectrum_shape = tuple(int(value) for value in source["spectrum_shape"])
         phase_shape = tuple(int(value) for value in source["phase_shape"])
+        spectrum_statistics_shape = tuple(source["spectrum_mean"].shape)
+        phase_statistics_shape = tuple(source["phase_mean"].shape)
     total = int(np.prod(spectrum_shape) + np.prod(phase_shape))
     if expected_total is not None and total != expected_total:
         raise ValueError(f"Encoded latent has {total} elements; expected {expected_total}")
+    if len(spectrum_statistics_shape) != 2 or spectrum_statistics_shape[0] != 2:
+        raise ValueError("Spectrum latent statistics are not separated by base station")
+    if len(phase_statistics_shape) != 2 or phase_statistics_shape[0] != 2:
+        raise ValueError("Detail latent statistics are not separated by base station")
     return {
         "spectrum_shape": list(spectrum_shape),
         "phase_shape": list(phase_shape),
         "total_latent_elements": total,
+        "latent_statistics": "per_cell",
     }
 
 
@@ -102,12 +109,16 @@ def verify_fold0(project: Path) -> dict:
     artifact_root = project / "artifacts" / "fold0"
     result = {
         name: verify_stage(artifact_root, name, require_best=True)
-        for name in ("autoencoder", "context", "joint")
+        for name in ("autoencoder", "context")
     }
     result["encoded"] = verify_encoded(artifact_root / "encoded.npz", 30720)
+    mask_report = read_json(artifact_root / "context_mask_report.json")
+    if mask_report.get("status") != "PASS":
+        raise ValueError("Context training-mask support gate did not pass")
+    result["context_mask_support"] = mask_report
     result["evaluations"] = {
         name: verify_evaluation(artifact_root / name / "evaluation.json")
-        for name in ("autoencoder", "context", "joint")
+        for name in ("autoencoder", "context")
     }
     ablation = read_json(artifact_root / "autoencoder" / "ablation.json")
     gate = read_json(artifact_root / "autoencoder" / "quality_gate.json")
@@ -118,7 +129,7 @@ def verify_fold0(project: Path) -> dict:
         "shuffle_drop": float(ablation["shuffle_drop"]),
     }
     result["autoencoder_quality_gate"] = gate
-    scan = read_json(artifact_root / "joint" / "outage_scan.json")
+    scan = read_json(artifact_root / "context" / "outage_scan.json")
     threshold = float(scan["best_threshold"])
     if not 0.0 < threshold < 1.0:
         raise ValueError(f"Invalid Fold0 outage threshold: {threshold}")
@@ -134,17 +145,21 @@ def verify_final(project: Path) -> dict:
     artifact_root = project / "artifacts" / "final"
     result = {
         name: verify_stage(artifact_root, name, require_best=False)
-        for name in ("autoencoder", "context", "joint")
+        for name in ("autoencoder", "context")
     }
     result["encoded"] = verify_encoded(artifact_root / "encoded.npz", 30720)
+    mask_report = read_json(artifact_root / "context_mask_report.json")
+    if mask_report.get("status") != "PASS":
+        raise ValueError("Final Context training-mask support gate did not pass")
+    result["context_mask_support"] = mask_report
     output_path = project / "outputs" / "final" / "Round2_Test_Channel.npy"
     result["output"] = verify_output(output_path, 500)
     output_report = read_json(output_path.with_suffix(".json"))
     if int(output_report.get("shape", [0])[0]) != 500:
         raise ValueError("Final output JSON does not describe 500 samples")
-    joint_checkpoint = artifact_root / "joint" / "final.pt"
-    if output_path.stat().st_mtime_ns < joint_checkpoint.stat().st_mtime_ns:
-        raise ValueError("Final output is older than the final Joint checkpoint")
+    context_checkpoint = artifact_root / "context" / "final.pt"
+    if output_path.stat().st_mtime_ns < context_checkpoint.stat().st_mtime_ns:
+        raise ValueError("Final output is older than the final Context checkpoint")
     return result
 
 
@@ -152,7 +167,7 @@ def verify_smoke(project: Path) -> dict:
     artifact_root = project / "artifacts" / "smoke"
     result = {
         name: verify_stage(artifact_root, name, require_best=True)
-        for name in ("autoencoder", "context", "joint")
+        for name in ("autoencoder", "context")
     }
     result["encoded"] = verify_encoded(artifact_root / "encoded.npz", None)
     result["output"] = verify_output(

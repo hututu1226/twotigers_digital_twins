@@ -53,16 +53,34 @@ def build_context_model(
         map_hidden_channels=int(section["map_hidden_channels"]),
         context_base_channels=int(section["base_channels"]),
         context_feature_channels=int(section["context_feature_channels"]),
+        environment_base_channels=int(section.get("environment_base_channels", 32)),
         environment_feature_channels=int(section["environment_feature_channels"]),
+        environment_blocks=int(section.get("environment_blocks", 2)),
+        corridor_width=int(section.get("corridor_width", 96)),
+        corridor_heads=int(section.get("corridor_heads", 4)),
+        corridor_layers=int(section.get("corridor_layers", 2)),
+        corridor_maximum_samples=int(section.get("corridor_maximum_samples", 32)),
         station_embedding_channels=int(section["station_embedding_channels"]),
         fourier_bands=int(section["fourier_bands"]),
         global_width=int(section["global_width"]),
         global_blocks=int(section["global_blocks"]),
+        router_width=int(section.get("router_width", 128)),
+        router_top_k=int(section.get("router_top_k", 96)),
+        pair_width=int(section.get("pair_width", 128)),
         spectrum_token_channels=int(section["spectrum_token_channels"]),
         detail_token_channels=int(section["detail_token_channels"]),
         attention_heads=int(section["attention_heads"]),
         attention_chunk_size=int(section["attention_chunk_size"]),
         refinement_blocks=int(section["refinement_blocks"]),
+        axial_blocks=int(section.get("axial_blocks", 2)),
+        spectrum_maximum_warp=tuple(
+            float(value)
+            for value in section.get("spectrum_maximum_warp", [0.75, 1.5, 3.0])
+        ),
+        detail_maximum_warp=tuple(
+            float(value)
+            for value in section.get("detail_maximum_warp", [1.5, 3.0, 6.0])
+        ),
         dropout=float(section.get("dropout", 0.05)),
         gradient_checkpointing=bool(section.get("gradient_checkpointing", True)),
     )
@@ -79,8 +97,15 @@ def build_device_cache(
     section = repository.config["context"]
     if device.type != "cuda" or not bool(section.get("cache_latents_on_device", True)):
         return None
-    use_half = bool(repository.config["runtime"].get("amp", True))
-    latent_dtype = torch.float16 if use_half else torch.float32
+    dtype_name = str(section.get("latent_cache_dtype", "float32")).lower()
+    latent_dtypes = {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }
+    if dtype_name not in latent_dtypes:
+        raise ValueError(f"Unsupported latent_cache_dtype={dtype_name}")
+    latent_dtype = latent_dtypes[dtype_name]
     spectrum = torch.as_tensor(
         repository.spectrum_z, device=device, dtype=latent_dtype
     ).reshape(-1, *repository.spectrum_shape)
@@ -184,10 +209,14 @@ def _decode_predictions(
     shape: ChannelShape,
 ) -> torch.Tensor:
     device = outputs["spectrum"].device
-    spectrum_mean = torch.as_tensor(repository.encoded["spectrum_mean"], device=device)
-    spectrum_std = torch.as_tensor(repository.encoded["spectrum_std"], device=device)
-    phase_mean = torch.as_tensor(repository.encoded["phase_mean"], device=device)
-    phase_std = torch.as_tensor(repository.encoded["phase_std"], device=device)
+    def latent_stat(name: str) -> torch.Tensor:
+        value = torch.as_tensor(repository.encoded[name], device=device)
+        return value[int(cell_id)] if value.ndim == 2 else value
+
+    spectrum_mean = latent_stat("spectrum_mean")
+    spectrum_std = latent_stat("spectrum_std")
+    phase_mean = latent_stat("phase_mean")
+    phase_std = latent_stat("phase_std")
     power_mean = torch.as_tensor(repository.encoded["power_mean"], device=device)
     power_std = torch.as_tensor(repository.encoded["power_std"], device=device)
     spectrum = outputs["spectrum"].float() * spectrum_std + spectrum_mean
@@ -229,6 +258,15 @@ def predict_indices(
     phase = np.empty((count, repository.phase_latent_dim), dtype=np.float32)
     power = np.empty(count, dtype=np.float32)
     outage_probability = np.empty(count, dtype=np.float32)
+    diagnostics = {
+        name: np.empty(count, dtype=np.float32)
+        for name in (
+            "router_entropy",
+            "router_distance",
+            "spectrum_warp",
+            "detail_warp",
+        )
+    }
     for cell_id in range(repository.cell_count):
         local = np.flatnonzero(cell_ids == cell_id)
         if not len(local):
@@ -258,11 +296,14 @@ def predict_indices(
             outage_probability[local_batch] = (
                 torch.sigmoid(outputs["outage_logit"]).float().cpu().numpy()
             )
+            for name, values in diagnostics.items():
+                values[local_batch] = outputs[name].float().cpu().numpy()
     return {
         "spectrum": spectrum,
         "phase": phase,
         "power": power,
         "outage_probability": outage_probability,
+        **diagnostics,
     }
 
 
@@ -389,6 +430,7 @@ def evaluate_context_thresholds(
         result = metrics.compute()
         result.update(
             {
+                "outage_threshold": threshold,
                 "spectrum_latent_mse_z": spectrum_mse,
                 "phase_latent_mse_z": phase_mse,
                 "power_mae_z": (
@@ -407,6 +449,10 @@ def evaluate_context_thresholds(
                 "outage_recall": recall,
                 "outage_f1": 2.0 * precision * recall / max(precision + recall, 1e-30),
                 "predicted_outages": int(predicted_outage.sum()),
+                "router_entropy": float(outputs["router_entropy"].mean()),
+                "router_distance_normalized": float(outputs["router_distance"].mean()),
+                "spectrum_warp_bins": float(outputs["spectrum_warp"].mean()),
+                "detail_warp_bins": float(outputs["detail_warp"].mean()),
                 "samples": int(len(target_indices)),
             }
         )
@@ -426,7 +472,6 @@ def _save_checkpoint(
     metrics: dict,
     best_score: float,
     epochs_without_improvement: int,
-    joint: bool,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -441,14 +486,14 @@ def _save_checkpoint(
             "metrics": metrics,
             "best_score": best_score,
             "epochs_without_improvement": epochs_without_improvement,
-            "joint": joint,
+            "training_stage": "context_v2",
         },
         path,
     )
 
 
-def train_context_model(config: dict, resume: bool = False, joint: bool = False) -> dict:
-    seed_everything(int(config["seed"]) + (10000 if joint else 0))
+def train_context_model(config: dict, resume: bool = False) -> dict:
+    seed_everything(int(config["seed"]))
     device = choose_device(config["runtime"]["device"])
     amp = bool(config["runtime"].get("amp", True))
     metadata = load_metadata(config)
@@ -492,22 +537,33 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
     if loaded_shape != shape:
         raise ValueError("Autoencoder and preprocessing channel shapes differ")
 
-    section = config["joint"] if joint else config["context"]
-    if joint:
-        source_path = Path(section["context_checkpoint"])
-        source = torch.load(source_path, map_location=device, weights_only=False)
-        model.load_state_dict(source["model"])
-        if "autoencoder" in source:
-            autoencoder.load_state_dict(source["autoencoder"])
+    section = config["context"]
     autoencoder.requires_grad_(False)
-    if joint:
+    train_decoder = bool(section.get("train_decoder", True))
+    if train_decoder:
         autoencoder.decoder.requires_grad_(True)
-    parameters = list(model.parameters())
-    if joint:
-        parameters.extend(parameter for parameter in autoencoder.decoder.parameters())
+    model_parameters = list(model.parameters())
+    decoder_parameters = (
+        list(autoencoder.decoder.parameters()) if train_decoder else []
+    )
+    parameters = model_parameters + decoder_parameters
+    parameter_groups: list[dict] = [
+        {"params": model_parameters, "lr": float(section["learning_rate"])}
+    ]
+    if decoder_parameters:
+        parameter_groups.append(
+            {
+                "params": decoder_parameters,
+                "lr": float(
+                    section.get(
+                        "decoder_learning_rate",
+                        float(section["learning_rate"]) * 0.02,
+                    )
+                ),
+            }
+        )
     optimizer = torch.optim.AdamW(
-        parameters,
-        lr=float(section["learning_rate"]),
+        parameter_groups,
         weight_decay=float(section.get("weight_decay", 1e-4)),
     )
     epochs = int(section["epochs"])
@@ -565,7 +621,13 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
     validation_interval = int(section.get("validation_interval", 5))
     patience = int(section.get("early_stopping_patience", 0))
     minimum_delta = float(section.get("minimum_delta", 1e-4))
-    outage_threshold = float(section.get("outage_threshold", 0.999))
+    outage_thresholds = [
+        float(value)
+        for value in section.get(
+            "validation_outage_thresholds",
+            [section.get("outage_threshold", 0.999)],
+        )
+    ]
     decode_batch_size = int(section.get("validation_decode_batch_size", 8))
     nonoutage_count = int((~metadata["outage"][training_indices]).sum())
     outage_count = int(metadata["outage"][training_indices].sum())
@@ -588,14 +650,14 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
         last_epoch = epoch
         started = time.perf_counter()
         model.train()
-        autoencoder.decoder.train(joint)
+        autoencoder.decoder.train(train_decoder)
         optimizer.zero_grad(set_to_none=True)
         sums: defaultdict[str, float] = defaultdict(float)
         batches = 0
-        rng = np.random.default_rng(int(config["seed"]) + epoch * 1000003 + (91 if joint else 0))
+        rng = np.random.default_rng(int(config["seed"]) + epoch * 1000003)
         for step in range(steps_per_epoch):
             cell_id = int(rng.integers(repository.cell_count))
-            targets = repository.sample_hole(
+            mask_sample = repository.sample_spatial_mask(
                 rng,
                 cell_id,
                 float(section["hole_min_meters"]),
@@ -603,8 +665,13 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
                 int(section["minimum_targets"]),
                 int(section["maximum_targets"]),
                 float(section.get("outage_anchor_probability", 0.25)),
+                float(section.get("test_template_probability", 0.65)),
+                float(section.get("template_radius_meters", 3.0)),
+                float(section.get("observation_guard_min_meters", 3.5)),
+                float(section.get("observation_guard_max_meters", 8.5)),
             )
-            context_indices = repository.context_indices(cell_id, targets)
+            targets = mask_sample.targets
+            context_indices = repository.context_indices(cell_id, mask_sample.hidden)
             maximum_observations = int(section.get("maximum_observations", 0))
             if maximum_observations > 0 and len(context_indices) > maximum_observations:
                 context_indices = np.sort(
@@ -647,6 +714,12 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
                     terms["phase_latent"] = functional.smooth_l1_loss(
                         outputs["phase"][nonzero].float(), target_phase[nonzero]
                     )
+                    terms["detail_correlation"] = 1.0 - functional.cosine_similarity(
+                        outputs["phase"][nonzero].float().flatten(1),
+                        target_phase[nonzero].float().flatten(1),
+                        dim=1,
+                        eps=1e-8,
+                    ).mean()
                     terms["power"] = functional.smooth_l1_loss(
                         outputs["power"][nonzero].float(), target_power[nonzero]
                     )
@@ -667,6 +740,27 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
                     terms["joint_power"] = joint_power_loss(
                         predicted_shape, target_shape[nonzero], shape
                     )
+                    if train_decoder:
+                        teacher_outputs = {
+                            "spectrum": target_spectrum[nonzero],
+                            "phase": target_phase[nonzero],
+                            "power": target_power[nonzero],
+                        }
+                        teacher_prediction = _decode_predictions(
+                            teacher_outputs,
+                            cell_id,
+                            repository,
+                            autoencoder,
+                            shape,
+                        )
+                        teacher_losses = metric_aligned_channel_losses(
+                            teacher_prediction, target_channel[nonzero], shape
+                        )
+                        terms["decoder_teacher"] = teacher_losses["score"]
+                    terms["warp_regularization"] = 0.5 * (
+                        outputs["spectrum_warp"].float().mean()
+                        + outputs["detail_warp"].float().mean()
+                    )
                 total = weighted_sum(terms, weights) / accumulation
             if not torch.isfinite(total):
                 raise FloatingPointError(
@@ -683,14 +777,21 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
                 optimizer.zero_grad(set_to_none=True)
             for name, value in terms.items():
                 sums[name] += float(value.detach().cpu())
+            sums["mask_hidden"] += float(len(mask_sample.hidden))
+            sums["mask_targets"] += float(len(mask_sample.targets))
+            sums["mask_guard_meters"] += mask_sample.guard_meters
+            sums["router_entropy"] += float(outputs["router_entropy"].detach().mean().cpu())
+            sums["router_distance"] += float(outputs["router_distance"].detach().mean().cpu())
+            sums["spectrum_warp"] += float(outputs["spectrum_warp"].detach().mean().cpu())
+            sums["detail_warp"] += float(outputs["detail_warp"].detach().mean().cpu())
             sums["total"] += float(total.detach().cpu()) * accumulation
             batches += 1
         train_metrics = {name: value / max(batches, 1) for name, value in sums.items()}
         should_validate = len(validation_indices) and (
             (epoch + 1) % validation_interval == 0 or epoch + 1 == epochs
         )
-        validation = (
-            evaluate_context_model(
+        validation_reports = (
+            evaluate_context_thresholds(
                 model,
                 autoencoder,
                 repository,
@@ -698,17 +799,29 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
                 shape,
                 device,
                 amp,
-                outage_threshold,
+                outage_thresholds,
                 decode_batch_size,
                 device_cache,
             )
             if should_validate
+            else []
+        )
+        validation = (
+            max(validation_reports, key=lambda report: float(report["score"]))
+            if validation_reports
             else {}
         )
+        if validation:
+            validation["outage_threshold_candidates"] = len(outage_thresholds)
         final_metrics = validation or train_metrics
         record = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
+            "decoder_learning_rate": (
+                optimizer.param_groups[1]["lr"]
+                if len(optimizer.param_groups) > 1
+                else 0.0
+            ),
             "train": train_metrics,
             "validation": validation,
             "elapsed_seconds": time.perf_counter() - started,
@@ -736,7 +849,6 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
                 validation,
                 best_score,
                 0,
-                joint,
             )
         elif validation:
             epochs_without_improvement += validation_interval
@@ -752,12 +864,12 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
             final_metrics,
             best_score,
             epochs_without_improvement,
-            joint,
         )
-        stage = "Joint" if joint else "Context"
+        stage = "Context"
         print(
             f"{stage} epoch={epoch + 1}/{epochs} train={train_metrics.get('total', 0.0):.6f} "
             f"score={validation.get('score', float('nan')):.6f} "
+            f"threshold={validation.get('outage_threshold', float('nan')):.4f} "
             f"seconds={record['elapsed_seconds']:.2f}",
             flush=True,
         )
@@ -797,13 +909,17 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
         final_metrics,
         best_score,
         epochs_without_improvement,
-        joint,
     )
     summary = {
         "device": str(device),
-        "joint": joint,
+        "training_stage": "context_v2",
+        "architecture": "geometry_warped_context_v2",
+        "decoder_trained_end_to_end": train_decoder,
         "context_parameters": count_parameters(model),
         "autoencoder_parameters": count_parameters(autoencoder),
+        "decoder_trainable_parameters": sum(
+            parameter.numel() for parameter in decoder_parameters
+        ),
         "trainable_parameters": sum(parameter.numel() for parameter in parameters),
         "training_samples": int(len(repository.observed_indices)),
         "validation_samples": int(len(validation_indices)),
@@ -814,6 +930,7 @@ def train_context_model(config: dict, resume: bool = False, joint: bool = False)
         "stop_reason": stop_reason,
         "training_elapsed_seconds": time.perf_counter() - training_started,
         "latent_cache_on_device": device_cache is not None,
+        "latent_cache_dtype": str(section.get("latent_cache_dtype", "float32")),
         "output_dir": str(output_dir),
     }
     save_json(output_dir / "summary.json", summary)

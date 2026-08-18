@@ -1,5 +1,7 @@
 # Scheme C 算法设计说明书
 
+> **版本说明（2026-08-18）**：本文的 AE v4 部分仍可作为背景资料；其中旧 Context 和“单独 Joint 微调”部分仅作历史记录，不再对应正式代码。当前 Context V2 设计请以 [`context_v2_design.md`](context_v2_design.md) 为准，运行流程请以 [`context_v2_autodl.md`](context_v2_autodl.md) 为准。
+
 ## 1. 文档目的
 
 本方案解决的问题是：已知约 4000 条双基站训练样本的用户坐标、场景点云和信道，预测 500 个测试坐标的信道。

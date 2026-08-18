@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
-    result = train_context_model(load_config(args.config), resume=args.resume, joint=False)
+    result = train_context_model(load_config(args.config), resume=args.resume)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

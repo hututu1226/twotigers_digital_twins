@@ -17,14 +17,17 @@ from scheme_c.autoencoder import (
 )
 from scheme_c.autoencoder_training import autoencoder_training_stage
 from scheme_c.context_model import CellTokenPool, FullResolutionContextField
+from scheme_c.context_data import ContextRepository
 from scheme_c.data import balanced_limit
 from scheme_c.losses import (
     complex_coherence_loss,
     energy_weighted_complex_direction_loss,
+    metric_aligned_channel_losses,
 )
 from scheme_c.metrics import (
     cosine_accuracy,
     nmse,
+    official_score,
     pas_accuracy,
     pdp_accuracy,
 )
@@ -183,6 +186,24 @@ class AngleDelayTests(unittest.TestCase):
             places=6,
         )
 
+    def test_metric_aligned_score_loss_matches_official_formula(self) -> None:
+        torch.manual_seed(8)
+        target = torch.complex(
+            torch.randn(2, 64, 1, 16), torch.randn(2, 64, 1, 16)
+        )
+        prediction = target + 0.2 * torch.complex(
+            torch.randn_like(target.real), torch.randn_like(target.real)
+        )
+        losses = metric_aligned_channel_losses(prediction, target, self.shape)
+        pas = float(pas_accuracy(prediction, target, self.shape))
+        pdp = float(pdp_accuracy(prediction, target))
+        channel_nmse = float(nmse(prediction, target))
+        self.assertAlmostEqual(
+            float(losses["score"]),
+            1.0 - official_score(pas, pdp, channel_nmse),
+            places=6,
+        )
+
 
 class SpatialAndContextTests(unittest.TestCase):
     def test_grid_offsets_and_sampling_coordinates(self) -> None:
@@ -235,16 +256,26 @@ class SpatialAndContextTests(unittest.TestCase):
             map_hidden_channels=8,
             context_base_channels=2,
             context_feature_channels=4,
+            environment_base_channels=2,
             environment_feature_channels=2,
+            environment_blocks=1,
+            corridor_width=8,
+            corridor_heads=2,
+            corridor_layers=1,
+            corridor_maximum_samples=8,
             station_embedding_channels=2,
             fourier_bands=2,
             global_width=16,
             global_blocks=1,
+            router_width=8,
+            router_top_k=3,
+            pair_width=8,
             spectrum_token_channels=8,
             detail_token_channels=8,
             attention_heads=2,
             attention_chunk_size=2,
             refinement_blocks=1,
+            axial_blocks=1,
             dropout=0.0,
             gradient_checkpointing=True,
         )
@@ -281,7 +312,10 @@ class SpatialAndContextTests(unittest.TestCase):
         self.assertEqual(outputs["phase"].shape, (2, 32))
         self.assertEqual(outputs["power"].shape, (2,))
         self.assertEqual(outputs["outage_logit"].shape, (2,))
-        self.assertEqual(outputs["detail_confidence"].shape, (2,))
+        self.assertEqual(outputs["router_entropy"].shape, (2,))
+        self.assertEqual(outputs["router_distance"].shape, (2,))
+        self.assertEqual(outputs["spectrum_warp"].shape, (2,))
+        self.assertEqual(outputs["detail_warp"].shape, (2,))
         sum(value.square().mean() for value in outputs.values()).backward()
         gradients = [
             parameter.grad
@@ -290,6 +324,39 @@ class SpatialAndContextTests(unittest.TestCase):
         ]
         self.assertTrue(gradients)
         self.assertTrue(all(torch.isfinite(gradient).all() for gradient in gradients))
+
+    def test_spatial_mask_hides_the_complete_region_and_guard_band(self) -> None:
+        repository = ContextRepository.__new__(ContextRepository)
+        x, y = np.meshgrid(np.arange(0.0, 30.0, 2.0), np.arange(0.0, 20.0, 2.0))
+        positions = np.stack([x.ravel(), y.ravel(), np.full(x.size, 1.5)], axis=1).astype(
+            np.float32
+        )
+        repository.metadata = {
+            "train_positions": positions,
+            "outage": np.zeros(len(positions), dtype=bool),
+        }
+        repository.indices_by_cell = [np.arange(len(positions), dtype=np.int64)]
+        repository.test_component_templates = [[]]
+        sample = repository.sample_spatial_mask(
+            np.random.default_rng(7),
+            cell_id=0,
+            minimum_meters=12.0,
+            maximum_meters=12.0,
+            minimum_targets=2,
+            maximum_targets=3,
+            test_template_probability=0.0,
+            guard_min_meters=4.0,
+            guard_max_meters=4.0,
+        )
+        observed = repository.context_indices(0, sample.hidden)
+        self.assertLessEqual(len(sample.targets), 3)
+        self.assertTrue(set(sample.targets).issubset(set(sample.hidden)))
+        self.assertFalse(np.intersect1d(sample.hidden, observed).size)
+        distance = np.linalg.norm(
+            positions[sample.targets, None, :2] - positions[observed][None, :, :2],
+            axis=2,
+        )
+        self.assertGreaterEqual(float(distance.min()), 4.0)
 
 
 if __name__ == "__main__":

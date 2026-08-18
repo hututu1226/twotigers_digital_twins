@@ -23,8 +23,7 @@ def main() -> None:
     parser.add_argument("--template", default="configs/final_5090.json")
     parser.add_argument("--ae-checkpoint", default="artifacts/fold0/autoencoder/best.pt")
     parser.add_argument("--context-checkpoint", default="artifacts/fold0/context/best.pt")
-    parser.add_argument("--joint-checkpoint", default="artifacts/fold0/joint/best.pt")
-    parser.add_argument("--outage-report", default="artifacts/fold0/joint/outage_scan.json")
+    parser.add_argument("--outage-report", default="artifacts/fold0/context/outage_scan.json")
     parser.add_argument(
         "--ae-gate", default="artifacts/fold0/autoencoder/quality_gate.json"
     )
@@ -42,7 +41,6 @@ def main() -> None:
     selected_epochs = {
         "autoencoder": trained_epochs(args.ae_checkpoint, args.epoch_multiplier),
         "context": trained_epochs(args.context_checkpoint, args.epoch_multiplier),
-        "joint": trained_epochs(args.joint_checkpoint, args.epoch_multiplier),
     }
     for stage, epochs in selected_epochs.items():
         config[stage]["epochs"] = epochs

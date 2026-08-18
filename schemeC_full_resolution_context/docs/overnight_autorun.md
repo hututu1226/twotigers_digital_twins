@@ -43,7 +43,7 @@ AutoDL 官方说明：
 2. 运行或验证 1/32 样本 AE 容量门槛。
 3. Fold0 不完整时从兼容的 `last.pt` 续训；完整时直接跳过。
 4. AE 训练后检查 Score、去 Detail 增益和打乱 Detail 下降。
-5. 只有 AE 门槛通过才运行 Context 与 Joint。
+5. 只有 AE 门槛通过才运行一次端到端 Context V2；AE decoder 已在该阶段以小学习率联合优化，不再单独运行 Joint。
 6. 验证 Fold0 checkpoint、指标、30,720 维 latent 和 500 条输出。
 7. 打包 Fold0 并验证 SHA256。
 8. 如果已挂载 `/root/autodl-fs`，额外复制一份结果包。
@@ -266,7 +266,6 @@ Final 模式成功后核心文件为：
 outputs/final/Round2_Test_Channel.npy
 artifacts/final/autoencoder/final.pt
 artifacts/final/context/final.pt
-artifacts/final/joint/final.pt
 artifacts/final/completion_report.json
 logs/overnight_status.txt
 schemeC_results_YYYYMMDD_HHMMSS.tar.gz
@@ -336,7 +335,7 @@ kill "$(cat logs/overnight.pid)"
 随后检查是否仍有训练子进程：
 
 ```bash
-ps -ef | grep -E 'train_autoencoder|train_context|finetune_joint|run_overnight' | grep -v grep
+ps -ef | grep -E 'train_autoencoder|train_context|run_overnight' | grep -v grep
 ```
 
 如果仍有训练进程，需要单独结束。仅杀掉外层脚本不一定会自动结束已经启动的 Python 子进程。

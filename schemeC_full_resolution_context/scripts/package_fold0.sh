@@ -27,15 +27,12 @@ required=(
   artifacts/fold0/autoencoder/ablation.json
   artifacts/fold0/autoencoder/quality_gate.json
   artifacts/fold0/encoded.npz
+  artifacts/fold0/context_mask_report.json
   artifacts/fold0/context/best.pt
   artifacts/fold0/context/final.pt
   artifacts/fold0/context/history.jsonl
   artifacts/fold0/context/evaluation.json
-  artifacts/fold0/joint/best.pt
-  artifacts/fold0/joint/final.pt
-  artifacts/fold0/joint/history.jsonl
-  artifacts/fold0/joint/evaluation.json
-  artifacts/fold0/joint/outage_scan.json
+  artifacts/fold0/context/outage_scan.json
   artifacts/fold0/stage_gap.json
   artifacts/fold0/repro_environment.txt
   artifacts/fold0/pip_freeze.txt

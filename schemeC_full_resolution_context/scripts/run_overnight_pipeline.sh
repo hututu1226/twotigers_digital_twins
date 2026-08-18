@@ -82,10 +82,8 @@ failure_backup() {
         artifacts/capacity/one_sample.json \
         artifacts/capacity/thirty_two_samples.json \
         artifacts/fold0/context/summary.json \
-        artifacts/fold0/joint/summary.json \
         artifacts/final/autoencoder/summary.json \
         artifacts/final/context/summary.json \
-        artifacts/final/joint/summary.json \
         2>/dev/null || true
     if [[ -s "$archive" ]]; then
         sha256sum "$archive" > "${archive}.sha256" || true

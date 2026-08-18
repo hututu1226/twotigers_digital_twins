@@ -19,15 +19,6 @@ def ceiling_gap(ceiling: dict, prediction: dict) -> dict:
     }
 
 
-def joint_gain(context: dict, joint: dict) -> dict:
-    return {
-        "pas_gain": float(joint["pas"]) - float(context["pas"]),
-        "pdp_gain": float(joint["pdp"]) - float(context["pdp"]),
-        "nmse_reduction": float(context["nmse"]) - float(joint["nmse"]),
-        "score_gain": float(joint["score"]) - float(context["score"]),
-    }
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Separate representation ceiling from spatial-prediction loss"
@@ -36,22 +27,18 @@ def main() -> None:
         "--autoencoder", default="artifacts/fold0/autoencoder/evaluation.json"
     )
     parser.add_argument("--context", default="artifacts/fold0/context/evaluation.json")
-    parser.add_argument("--joint", default="artifacts/fold0/joint/evaluation.json")
     parser.add_argument("--output", default="artifacts/fold0/stage_gap.json")
     args = parser.parse_args()
     autoencoder = metrics(args.autoencoder)
     context = metrics(args.context)
-    joint = metrics(args.joint)
     result = {
         "autoencoder_ceiling": autoencoder,
-        "context_before_joint": context,
-        "context_after_joint": joint,
-        "ceiling_to_joint_gap": ceiling_gap(autoencoder, joint),
-        "joint_finetune_gain": joint_gain(context, joint),
+        "context_v2": context,
+        "ceiling_to_context_gap": ceiling_gap(autoencoder, context),
         "interpretation": {
             "low_autoencoder_score": "representation bottleneck; improve AE before context model",
-            "large_ceiling_to_joint_gap": "context/query prediction bottleneck",
-            "small_joint_finetune_gain": "joint fine-tuning adds little and can be shortened"
+            "large_ceiling_to_context_gap": "context/query prediction bottleneck",
+            "decoder_training": "the decoder is optimized inside the single Context V2 run"
         }
     }
     target = Path(args.output)

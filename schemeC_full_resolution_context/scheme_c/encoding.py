@@ -64,19 +64,23 @@ def encode_training_set(config: dict, checkpoint_path: str | Path | None = None)
     if not len(nonzero_training):
         raise ValueError("No non-outage samples are available for latent statistics")
     minimum_std = float(config["encoding"].get("minimum_latent_std", 1e-3))
-    spectrum_mean = spectrum[nonzero_training].mean(axis=0).astype(np.float32)
-    spectrum_std = np.maximum(
-        spectrum[nonzero_training].std(axis=0), minimum_std
-    ).astype(np.float32)
-    phase_mean = phase[nonzero_training].mean(axis=0).astype(np.float32)
-    phase_std = np.maximum(phase[nonzero_training].std(axis=0), minimum_std).astype(
-        np.float32
-    )
     cell_count = int(metadata["train_cells"].max()) + 1
+    spectrum_mean = np.zeros((cell_count, spectrum.shape[1]), dtype=np.float32)
+    spectrum_std = np.ones((cell_count, spectrum.shape[1]), dtype=np.float32)
+    phase_mean = np.zeros((cell_count, phase.shape[1]), dtype=np.float32)
+    phase_std = np.ones((cell_count, phase.shape[1]), dtype=np.float32)
     power_mean = np.zeros(cell_count, dtype=np.float32)
     power_std = np.ones(cell_count, dtype=np.float32)
     for cell_id in range(cell_count):
         selected = nonzero_training[metadata["train_cells"][nonzero_training] == cell_id]
+        if not len(selected):
+            raise ValueError(f"Cell {cell_id} has no non-outage samples for latent statistics")
+        spectrum_mean[cell_id] = spectrum[selected].mean(axis=0)
+        spectrum_std[cell_id] = np.maximum(
+            spectrum[selected].std(axis=0), minimum_std
+        )
+        phase_mean[cell_id] = phase[selected].mean(axis=0)
+        phase_std[cell_id] = np.maximum(phase[selected].std(axis=0), minimum_std)
         power_mean[cell_id] = metadata["log_power"][selected].mean()
         power_std[cell_id] = max(
             float(metadata["log_power"][selected].std()),
@@ -111,6 +115,7 @@ def encode_training_set(config: dict, checkpoint_path: str | Path | None = None)
         "spectrum_shape": list(model.spectrum_shape.tensor_shape),
         "phase_shape": list(model.phase_shape.tensor_shape),
         "total_latent_dim": model.total_latent_dim,
+        "latent_statistics": "per_cell",
         "storage_dtype": np.dtype(storage_dtype).name,
         "elapsed_seconds": time.perf_counter() - started,
     }

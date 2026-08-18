@@ -31,8 +31,7 @@ required=(
   artifacts/final/encoded.npz
   artifacts/final/context/final.pt
   artifacts/final/context/history.jsonl
-  artifacts/final/joint/final.pt
-  artifacts/final/joint/history.jsonl
+  artifacts/final/context_mask_report.json
   outputs/final/Round2_Test_Channel.npy
   outputs/final/Round2_Test_Channel.json
   configs/final_5090.json
@@ -69,20 +68,16 @@ optional=(
   artifacts/fold0/autoencoder/quality_gate.json
   artifacts/fold0/encoded.npz
   artifacts/fold0/encoded.json
+  artifacts/fold0/context_mask_report.json
   artifacts/fold0/context/best.pt
   artifacts/fold0/context/history.jsonl
   artifacts/fold0/context/summary.json
   artifacts/fold0/context/evaluation.json
-  artifacts/fold0/joint/best.pt
-  artifacts/fold0/joint/history.jsonl
-  artifacts/fold0/joint/summary.json
-  artifacts/fold0/joint/evaluation.json
-  artifacts/fold0/joint/outage_scan.json
+  artifacts/fold0/context/outage_scan.json
   artifacts/fold0/stage_gap.json
   artifacts/fold0/completion_report.json
   artifacts/final/autoencoder/summary.json
   artifacts/final/context/summary.json
-  artifacts/final/joint/summary.json
   artifacts/final/completion_report.json
   logs/fold0.log
   logs/final.log

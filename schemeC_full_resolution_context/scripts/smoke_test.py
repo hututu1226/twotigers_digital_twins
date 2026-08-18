@@ -29,19 +29,17 @@ def main() -> None:
         config["runtime"]["amp"] = args.device != "cpu"
     manifest = Path(config["preprocessing"]["artifact_dir"]) / "manifest.json"
     if not manifest.exists() or args.force_preprocess:
-        print("[1/6] dual-resolution preprocessing", flush=True)
+        print("[1/5] dual-resolution preprocessing", flush=True)
         preprocess_dataset(config, force=args.force_preprocess)
     else:
-        print("[1/6] preprocessing already exists", flush=True)
-    print("[2/6] factorized residual AE v4", flush=True)
+        print("[1/5] preprocessing already exists", flush=True)
+    print("[2/5] factorized residual AE v4", flush=True)
     autoencoder = train_autoencoder(config)
-    print("[3/6] latent encoding", flush=True)
+    print("[3/5] per-cell latent encoding", flush=True)
     encoding = encode_training_set(config)
-    print("[4/6] full-resolution latent context field", flush=True)
-    context = train_context_model(config, joint=False)
-    print("[5/6] joint decoder fine-tuning", flush=True)
-    joint = train_context_model(config, joint=True)
-    print("[6/6] test inference", flush=True)
+    print("[4/5] geometry-warped Context V2", flush=True)
+    context = train_context_model(config)
+    print("[5/5] test inference", flush=True)
     inference = generate_test_channels(config)
     output = np.load(inference["output_path"], mmap_mode="r")
     expected_count = int(config["runtime"].get("test_limit") or 500)
@@ -58,7 +56,6 @@ def main() -> None:
                 "autoencoder": autoencoder,
                 "encoding": encoding,
                 "context": context,
-                "joint": joint,
                 "inference": inference,
             },
             ensure_ascii=False,
