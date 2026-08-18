@@ -48,6 +48,10 @@ python scripts/analyze_context_masks.py --config configs/fold0_5090.json
 python scripts/inspect_architecture.py --config configs/fold0_5090.json
 ```
 
+`analyze_context_masks.py` automatically runs dataset preprocessing when
+`artifacts/preprocessed_scheme_c/metadata.npz` is absent. The first run therefore
+takes longer, but it does not train either model.
+
 The smoke test must finish with `"status": "PASS"` and produce a finite
 `complex64` array with shape `[2,256,4,192]`.
 

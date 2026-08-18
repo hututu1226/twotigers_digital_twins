@@ -304,7 +304,11 @@ class CorridorTransformer(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=layers)
+        self.encoder = nn.TransformerEncoder(
+            layer,
+            num_layers=layers,
+            enable_nested_tensor=False,
+        )
         self.output = nn.LayerNorm(width)
 
     def forward(self, sequence: torch.Tensor) -> torch.Tensor:

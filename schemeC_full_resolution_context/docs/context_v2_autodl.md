@@ -139,6 +139,10 @@ python scripts/analyze_context_masks.py \
   --output artifacts/context_v2_mask_report.json
 ```
 
+`analyze_context_masks.py` 如果发现
+`artifacts/preprocessed_scheme_c/metadata.npz` 不存在，会先自动执行一次数据预处理。
+首次运行会多花一些时间，但不会训练 AE 或 Context，也不会消耗训练轮数。
+
 结构检查必须包含：
 
 ```text

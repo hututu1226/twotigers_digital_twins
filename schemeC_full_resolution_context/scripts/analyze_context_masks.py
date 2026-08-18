@@ -11,6 +11,22 @@ import numpy as np
 from scheme_c.config import load_config, save_json
 from scheme_c.context_data import ContextRepository
 from scheme_c.data import load_metadata, split_indices
+from scheme_c.preprocessing import preprocess_dataset
+
+
+def ensure_preprocessing(config: dict) -> bool:
+    artifact_dir = Path(config["preprocessing"]["artifact_dir"])
+    metadata_path = artifact_dir / "metadata.npz"
+    if metadata_path.is_file():
+        return False
+
+    manifest_path = artifact_dir / "manifest.json"
+    print(
+        f"Preprocessing metadata is missing; building {metadata_path} before mask analysis.",
+        flush=True,
+    )
+    preprocess_dataset(config, force=manifest_path.exists())
+    return True
 
 
 def percentiles(values: list[float]) -> dict[str, float]:
@@ -31,6 +47,7 @@ def main() -> None:
         raise ValueError("samples must be positive")
 
     config = load_config(args.config)
+    ensure_preprocessing(config)
     metadata = load_metadata(config)
     training, _ = split_indices(metadata, config)
     repository = ContextRepository.__new__(ContextRepository)

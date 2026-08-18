@@ -5,12 +5,42 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from analyze_context_masks import ensure_preprocessing  # noqa: E402
 from verify_completion import verify_ae  # noqa: E402
+
+
+class ContextMaskBootstrapTests(unittest.TestCase):
+    @patch("analyze_context_masks.preprocess_dataset")
+    def test_missing_metadata_triggers_preprocessing(self, preprocess) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_dir = Path(directory) / "preprocessed"
+            artifact_dir.mkdir()
+            (artifact_dir / "manifest.json").write_text("{}", encoding="utf-8")
+            config = {"preprocessing": {"artifact_dir": str(artifact_dir)}}
+
+            rebuilt = ensure_preprocessing(config)
+
+        self.assertTrue(rebuilt)
+        preprocess.assert_called_once_with(config, force=True)
+
+    @patch("analyze_context_masks.preprocess_dataset")
+    def test_existing_metadata_is_reused(self, preprocess) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_dir = Path(directory) / "preprocessed"
+            artifact_dir.mkdir()
+            (artifact_dir / "metadata.npz").write_bytes(b"metadata")
+            config = {"preprocessing": {"artifact_dir": str(artifact_dir)}}
+
+            rebuilt = ensure_preprocessing(config)
+
+        self.assertFalse(rebuilt)
+        preprocess.assert_not_called()
 
 
 class AeAutomationVerificationTests(unittest.TestCase):
