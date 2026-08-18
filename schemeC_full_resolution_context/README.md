@@ -53,9 +53,18 @@ The smoke test must finish with `"status": "PASS"` and produce a finite
 
 ## Fold0 on AutoDL
 
-When the verified Fold0 AE artifacts already exist, `run_fold0.sh` reuses them,
-regenerates per-BS float32 latent data, trains Context V2, scans the outage
-threshold, evaluates Fold0, generates the 500 test channels, and checks format.
+The verified AE `best.pt` is stored in Git LFS together with its evaluation,
+ablation, summary, and quality-gate JSON files. After cloning, download the real
+checkpoint before running Scheme C:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+`run_fold0.sh` then reuses this AE, regenerates per-BS float32 latent data,
+trains Context V2, scans the outage threshold, evaluates Fold0, generates the
+500 test channels, and checks format.
 
 ```bash
 mkdir -p logs

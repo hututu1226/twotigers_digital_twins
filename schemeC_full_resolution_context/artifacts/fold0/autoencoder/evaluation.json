@@ -1,0 +1,18 @@
+{
+  "stage": "autoencoder",
+  "split": "validation",
+  "checkpoint": "/root/autodl-tmp/twotigers_digital_twins/schemeC_full_resolution_context/artifacts/fold0/autoencoder/best.pt",
+  "metrics": {
+    "pas": 0.9616093210454257,
+    "pdp": 0.9545545155147337,
+    "nmse": 0.09513206153365339,
+    "score": 0.9490919109534305,
+    "angle_delay_mse": 0.06082791060021838,
+    "spectrum_only_pas": 0.6272494734458204,
+    "spectrum_only_pdp": 0.6903129082805706,
+    "spectrum_only_nmse": 2.0077665136958887,
+    "spectrum_only_score": 0.5935194758157054,
+    "detail_gain_over_coarse": 0.3555724351377251,
+    "samples": 530
+  }
+}

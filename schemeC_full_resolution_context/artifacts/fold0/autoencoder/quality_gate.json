@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "enabled": true,
+  "measurements": {
+    "score": 0.9490919109534305,
+    "detail_gain": 0.3555724351377251,
+    "shuffle_drop": 0.38145849518426833
+  },
+  "thresholds": {
+    "minimum_score": 0.75,
+    "minimum_detail_gain": 0.1,
+    "minimum_shuffle_drop": 0.05
+  },
+  "checks": {
+    "score": true,
+    "detail_gain": true,
+    "shuffle_drop": true
+  },
+  "context_training_allowed": true
+}

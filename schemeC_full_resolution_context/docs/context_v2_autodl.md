@@ -49,9 +49,12 @@ pwd
 
 ```bash
 cd /root/autodl-tmp/twotigers_digital_twins
+git lfs version || (apt-get update && apt-get install -y git-lfs)
+git lfs install
 git status
 git switch 0817_schemeC
 git pull origin 0817_schemeC
+git lfs pull
 git log -1 --oneline
 ```
 
@@ -72,11 +75,20 @@ cd schemeC_full_resolution_context
 
 ## 4. 确认正式 AE 仍在
 
+仓库通过 Git LFS 提供一个可直接复用的最小 AE 包：`best.pt` 加上 summary、evaluation、ablation 和 quality gate。无需再上传 `last.pt`、`final.pt` 或训练历史。
+
 ```bash
+git lfs ls-files | grep 'artifacts/fold0/autoencoder/best.pt'
 ls -lh artifacts/fold0/autoencoder/best.pt
 cat artifacts/fold0/autoencoder/evaluation.json
 cat artifacts/fold0/autoencoder/quality_gate.json
 python scripts/verify_completion.py --stage ae
+```
+
+`best.pt` 应约为 98 MB。如果只有一百多字节，当前文件只是 LFS 指针，应回到仓库根目录执行：
+
+```bash
+git lfs pull
 ```
 
 应看到：

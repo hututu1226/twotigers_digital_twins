@@ -2,6 +2,7 @@
 Round2_Map/
 Round2_Map.zip
 artifacts/
+!schemeC_full_resolution_context/artifacts/
 checkpoints/
 outputs/
 downloads/

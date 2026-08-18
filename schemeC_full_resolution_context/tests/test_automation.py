@@ -19,11 +19,7 @@ class AeAutomationVerificationTests(unittest.TestCase):
     ) -> Path:
         stage = root / "artifacts" / "fold0" / "autoencoder"
         stage.mkdir(parents=True)
-        for checkpoint in ("best.pt", "last.pt", "final.pt"):
-            (stage / checkpoint).write_bytes(b"checkpoint" * 256)
-        (stage / "history.jsonl").write_text(
-            json.dumps({"epoch": 20}) + "\n", encoding="utf-8"
-        )
+        (stage / "best.pt").write_bytes(b"checkpoint" * 256)
         (stage / "summary.json").write_text(
             json.dumps(
                 {
@@ -75,6 +71,7 @@ class AeAutomationVerificationTests(unittest.TestCase):
             )
         self.assertEqual(result["quality_gate"]["status"], "PASS")
         self.assertEqual(result["total_latent_elements"], 30720)
+        self.assertGreater(result["checkpoint"]["bytes"], 1024)
 
     def test_completed_gate_failure_is_still_valid_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -94,4 +91,3 @@ class AeAutomationVerificationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

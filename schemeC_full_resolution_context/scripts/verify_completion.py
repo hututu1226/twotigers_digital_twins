@@ -108,8 +108,8 @@ def verify_stage(root: Path, stage: str, require_best: bool) -> dict:
 def verify_fold0(project: Path) -> dict:
     artifact_root = project / "artifacts" / "fold0"
     result = {
-        name: verify_stage(artifact_root, name, require_best=True)
-        for name in ("autoencoder", "context")
+        "autoencoder": verify_ae(project),
+        "context": verify_stage(artifact_root, "context", require_best=True),
     }
     result["encoded"] = verify_encoded(artifact_root / "encoded.npz", 30720)
     mask_report = read_json(artifact_root / "context_mask_report.json")
@@ -202,9 +202,14 @@ def verify_capacity(project: Path) -> dict:
 
 def verify_ae(project: Path) -> dict:
     root = project / "artifacts" / "fold0" / "autoencoder"
-    result = verify_stage(
-        project / "artifacts" / "fold0", "autoencoder", require_best=True
-    )
+    checkpoint = root / "best.pt"
+    require_file(checkpoint, minimum_bytes=1024)
+    result = {
+        "checkpoint": {
+            "path": str(checkpoint),
+            "bytes": checkpoint.stat().st_size,
+        }
+    }
     summary = read_json(root / "summary.json")
     if summary.get("architecture") != "factorized_residual_v4":
         raise ValueError("Fold0 AE analysis uses an old architecture")
