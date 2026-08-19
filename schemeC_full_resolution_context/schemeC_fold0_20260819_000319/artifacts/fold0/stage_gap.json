@@ -1,0 +1,48 @@
+{
+  "autoencoder_ceiling": {
+    "pas": 0.9616093210454257,
+    "pdp": 0.9545545155147337,
+    "nmse": 0.09513206153365339,
+    "score": 0.9490919109534305,
+    "angle_delay_mse": 0.06082791060021838,
+    "spectrum_only_pas": 0.6272494734458204,
+    "spectrum_only_pdp": 0.6903129082805706,
+    "spectrum_only_nmse": 2.0077665136958887,
+    "spectrum_only_score": 0.5935194758157054,
+    "detail_gain_over_coarse": 0.3555724351377251,
+    "samples": 530
+  },
+  "context_v2": {
+    "pas": 0.507468846496546,
+    "pdp": 0.7628838478394274,
+    "nmse": 1.1152946924224043,
+    "score": 0.6026905514868919,
+    "outage_threshold": 0.999,
+    "spectrum_latent_mse_z": 0.9561364650726318,
+    "phase_latent_mse_z": 0.8852829933166504,
+    "power_mae_z": 0.49487176537513733,
+    "power_rmse_z": 0.6391716599464417,
+    "power_mae_log10": 0.9658313393592834,
+    "outage_accuracy": 0.9380530973451328,
+    "outage_precision": 0.0,
+    "outage_recall": 0.0,
+    "outage_f1": 0.0,
+    "predicted_outages": 0,
+    "router_entropy": 0.04945366084575653,
+    "router_distance_normalized": 0.5687127113342285,
+    "spectrum_warp_bins": 0.09167879074811935,
+    "detail_warp_bins": 0.1604459583759308,
+    "samples": 565
+  },
+  "ceiling_to_context_gap": {
+    "pas_loss": 0.45414047454887974,
+    "pdp_loss": 0.19167066767530627,
+    "nmse_increase": 1.020162630888751,
+    "score_loss": 0.3464013594665386
+  },
+  "interpretation": {
+    "low_autoencoder_score": "representation bottleneck; improve AE before context model",
+    "large_ceiling_to_context_gap": "context/query prediction bottleneck",
+    "decoder_training": "the decoder is optimized inside the single Context V2 run"
+  }
+}

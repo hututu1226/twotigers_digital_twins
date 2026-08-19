@@ -1,0 +1,24 @@
+{
+  "status": "PASS",
+  "architecture": "factorized_residual_v4",
+  "model_parameters": 8527112,
+  "total_latent_dim": 30720,
+  "samples": 1,
+  "steps": 200,
+  "batch_size": 1,
+  "learning_rate": 0.001,
+  "minimum_score": 0.9,
+  "metrics": {
+    "pas": 0.9968161582946777,
+    "pdp": 0.9988279342651367,
+    "nmse": 0.02460341346759103,
+    "score": 0.9934551128191069,
+    "coarse_only_score": 0.39747633484489414,
+    "detail_gain": 0.5959787779742127
+  },
+  "elapsed_seconds": 8.102516120299697,
+  "device": "cuda",
+  "selected_indices": [
+    3001
+  ]
+}

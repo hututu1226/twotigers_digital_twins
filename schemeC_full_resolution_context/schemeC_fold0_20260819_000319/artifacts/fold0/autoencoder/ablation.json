@@ -1,0 +1,27 @@
+{
+  "checkpoint": "/root/autodl-tmp/twotigers_digital_twins/schemeC_full_resolution_context/artifacts/fold0/autoencoder/best.pt",
+  "checkpoint_epoch": 167,
+  "samples": 530,
+  "metrics": {
+    "full": {
+      "pas": 0.9616093210454257,
+      "pdp": 0.9545545155147337,
+      "nmse": 0.09513206153365339,
+      "score": 0.9490919109534305
+    },
+    "coarse_only": {
+      "pas": 0.6272494734458204,
+      "pdp": 0.6903129082805706,
+      "nmse": 2.0077665136958887,
+      "score": 0.5935194758157054
+    },
+    "shuffled_detail": {
+      "pas": 0.4858990322868779,
+      "pdp": 0.7672980596434396,
+      "nmse": 2.0141099984815902,
+      "score": 0.5676334157691622
+    }
+  },
+  "detail_gain": 0.3555724351377251,
+  "shuffle_drop": 0.38145849518426833
+}

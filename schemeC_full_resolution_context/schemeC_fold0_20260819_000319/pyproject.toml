@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "huawei-scheme-c-full-resolution-context"
+version = "0.4.0"
+description = "Factorized residual AE with a geometry-warped full-resolution context field"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26,<3",
+  "torch>=2.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scheme_c*"]

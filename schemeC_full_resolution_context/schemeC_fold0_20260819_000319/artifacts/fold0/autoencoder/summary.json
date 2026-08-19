@@ -1,0 +1,21 @@
+{
+  "device": "cuda",
+  "architecture": "factorized_residual_v4",
+  "parameters": 8527112,
+  "spectrum_latent_dim": 6144,
+  "phase_latent_dim": 24576,
+  "training_samples": 3208,
+  "validation_samples": 530,
+  "last_epoch": 223,
+  "best_score": 0.9490919109534305,
+  "best_spectrum_score": 0.7300736010538015,
+  "early_stopping_score": 0.9489043244971972,
+  "target_score": 0.8,
+  "target_reached": true,
+  "stop_reason": "early_stopping",
+  "training_elapsed_seconds": 5223.7153597753495,
+  "selection_metric": "score",
+  "coarse_pretrain_epochs": 8,
+  "detail_pretrain_epochs": 12,
+  "output_dir": "/root/autodl-tmp/twotigers_digital_twins/schemeC_full_resolution_context/artifacts/fold0/autoencoder"
+}

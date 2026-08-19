@@ -1,0 +1,522 @@
+{
+  "version": 2,
+  "setup": {
+    "P_Train": 4000,
+    "P_Test": 500,
+    "M": 256,
+    "M_H": 16,
+    "M_V": 8,
+    "M_P": 2,
+    "N": 4,
+    "N_H": 1,
+    "N_V": 2,
+    "N_P": 2,
+    "S": 192,
+    "Q": 2,
+    "X": [
+      [
+        -18.413,
+        -65.881,
+        25
+      ],
+      [
+        52,
+        35,
+        22
+      ]
+    ],
+    "w": [
+      0.4,
+      0.4,
+      0.2
+    ]
+  },
+  "data_root": "/root/autodl-tmp/twotigers_digital_twins/Round2_Map",
+  "metadata_path": "metadata.npz",
+  "cell_rule": {
+    "axis": 1,
+    "threshold": 14.370122909545898,
+    "gap": 61.644954681396484,
+    "score": 61.644954681396484,
+    "lower_cell": 0,
+    "upper_cell": 1,
+    "counts": [
+      2000,
+      2000
+    ],
+    "train_minimum_margin": 30.822477340698242,
+    "test_minimum_margin": 46.24444580078125,
+    "train_ranges": [
+      [
+        -265.21685791015625,
+        -16.452354431152344
+      ],
+      [
+        45.19260025024414,
+        234.97488403320312
+      ]
+    ],
+    "test_ranges": [
+      [
+        -263.9869079589844,
+        -95.8352279663086
+      ],
+      [
+        60.614566802978516,
+        231.25955200195312
+      ]
+    ]
+  },
+  "grids": [
+    {
+      "cell_id": 0,
+      "train_count": 2000,
+      "test_count": 250,
+      "boresight_degrees": -44.45306396484375,
+      "observed_relative_angle_limit": 59.9541015625,
+      "context_spec": {
+        "minimum_x": -72.0,
+        "minimum_y": -273.0,
+        "resolution": 3.0,
+        "height": 88,
+        "width": 87
+      },
+      "environment_spec": {
+        "minimum_x": -72.0,
+        "minimum_y": -272.0,
+        "resolution": 1.0,
+        "height": 262,
+        "width": 259
+      },
+      "context_static_path": "context_static_cell_0.npz",
+      "environment_static_path": "environment_static_cell_0.npz"
+    },
+    {
+      "cell_id": 1,
+      "train_count": 2000,
+      "test_count": 250,
+      "boresight_degrees": 73.52911376953125,
+      "observed_relative_angle_limit": 59.96125030517578,
+      "context_spec": {
+        "minimum_x": -93.0,
+        "minimum_y": 39.0,
+        "resolution": 3.0,
+        "height": 68,
+        "width": 114
+      },
+      "environment_spec": {
+        "minimum_x": -91.0,
+        "minimum_y": 29.0,
+        "resolution": 1.0,
+        "height": 212,
+        "width": 339
+      },
+      "context_static_path": "context_static_cell_1.npz",
+      "environment_static_path": "environment_static_cell_1.npz"
+    }
+  ],
+  "fold_count": 5,
+  "train_cell_counts": [
+    2000,
+    2000
+  ],
+  "test_cell_counts": [
+    250,
+    250
+  ],
+  "outage_count": 262,
+  "outage_by_cell": [
+    130,
+    132
+  ],
+  "context_grid_collisions": [
+    {
+      "cell_id": 0,
+      "sample_count": 2000,
+      "occupied_cells": 1583,
+      "collision_samples": 417,
+      "maximum_samples_per_cell": 4
+    },
+    {
+      "cell_id": 1,
+      "sample_count": 2000,
+      "occupied_cells": 1584,
+      "collision_samples": 416,
+      "maximum_samples_per_cell": 4
+    }
+  ],
+  "context_test_collisions": [
+    {
+      "cell_id": 0,
+      "test_samples": 250,
+      "test_unique_cells": 202,
+      "test_samples_sharing_train_cell": 12
+    },
+    {
+      "cell_id": 1,
+      "test_samples": 250,
+      "test_unique_cells": 205,
+      "test_samples_sharing_train_cell": 27
+    }
+  ],
+  "validation_support": [
+    {
+      "fold": 0,
+      "samples": 565,
+      "cell_counts": [
+        300,
+        265
+      ],
+      "minimum": 0.7931862022742937,
+      "p25": 4.4746789481498475,
+      "median": 6.500244018493123,
+      "p75": 9.485175612596743,
+      "maximum": 18.267255717075276
+    },
+    {
+      "fold": 1,
+      "samples": 501,
+      "cell_counts": [
+        264,
+        237
+      ],
+      "minimum": 0.6048957330573546,
+      "p25": 4.228068225579023,
+      "median": 6.284182793077214,
+      "p75": 9.165585685601021,
+      "maximum": 16.568388981274435
+    },
+    {
+      "fold": 2,
+      "samples": 564,
+      "cell_counts": [
+        246,
+        318
+      ],
+      "minimum": 0.9710921459157207,
+      "p25": 4.549453902321422,
+      "median": 6.713399465628806,
+      "p75": 9.377339914167795,
+      "maximum": 19.88730570273286
+    },
+    {
+      "fold": 3,
+      "samples": 440,
+      "cell_counts": [
+        217,
+        223
+      ],
+      "minimum": 0.6362775191085541,
+      "p25": 4.1244007440399155,
+      "median": 5.831744827204789,
+      "p75": 8.641130541484445,
+      "maximum": 15.39281814940649
+    },
+    {
+      "fold": 4,
+      "samples": 541,
+      "cell_counts": [
+        264,
+        277
+      ],
+      "minimum": 0.708992008587402,
+      "p25": 4.396074302193578,
+      "median": 6.51412442384907,
+      "p75": 8.752653464155204,
+      "maximum": 14.318015433622682
+    }
+  ],
+  "nearest_neighbor_meters": {
+    "minimum": 0.03689269281141599,
+    "p25": 1.306478529908659,
+    "median": 2.0138295959322985,
+    "p75": 2.8741658091790097,
+    "maximum": 7.984535635475218
+  },
+  "test_support": {
+    "nearest_same_cell_train_meters": {
+      "minimum": 0.1659062042932822,
+      "p25": 3.647417002038245,
+      "median": 6.029053376321757,
+      "p75": 9.070173484144808,
+      "maximum": 18.05563279486727
+    },
+    "component_link_meters": 6.0,
+    "components_by_cell": [
+      {
+        "cell_id": 0,
+        "component_count": 22,
+        "largest_components": [
+          {
+            "sample_count": 89,
+            "width_meters": 37.512428283691406,
+            "height_meters": 45.13880157470703,
+            "minimum_xy": [
+              98.88036346435547,
+              -144.73655700683594
+            ],
+            "maximum_xy": [
+              136.39279174804688,
+              -99.5977554321289
+            ]
+          },
+          {
+            "sample_count": 51,
+            "width_meters": 30.909805297851562,
+            "height_meters": 33.30244445800781,
+            "minimum_xy": [
+              -49.12339401245117,
+              -196.8083038330078
+            ],
+            "maximum_xy": [
+              -18.21358871459961,
+              -163.505859375
+            ]
+          },
+          {
+            "sample_count": 35,
+            "width_meters": 29.18856430053711,
+            "height_meters": 22.170318603515625,
+            "minimum_xy": [
+              21.21429443359375,
+              -145.65866088867188
+            ],
+            "maximum_xy": [
+              50.40285873413086,
+              -123.48834228515625
+            ]
+          },
+          {
+            "sample_count": 15,
+            "width_meters": 25.216469526290894,
+            "height_meters": 15.297592163085938,
+            "minimum_xy": [
+              3.1544315814971924,
+              -248.89239501953125
+            ],
+            "maximum_xy": [
+              28.370901107788086,
+              -233.5948028564453
+            ]
+          },
+          {
+            "sample_count": 11,
+            "width_meters": 9.707087516784668,
+            "height_meters": 15.987602233886719,
+            "minimum_xy": [
+              -17.729333877563477,
+              -117.05142974853516
+            ],
+            "maximum_xy": [
+              -8.022246360778809,
+              -101.06382751464844
+            ]
+          },
+          {
+            "sample_count": 8,
+            "width_meters": 9.129701614379883,
+            "height_meters": 7.9429931640625,
+            "minimum_xy": [
+              23.327314376831055,
+              -121.24755859375
+            ],
+            "maximum_xy": [
+              32.45701599121094,
+              -113.3045654296875
+            ]
+          },
+          {
+            "sample_count": 8,
+            "width_meters": 11.686661720275879,
+            "height_meters": 12.858489990234375,
+            "minimum_xy": [
+              -7.176165580749512,
+              -253.28903198242188
+            ],
+            "maximum_xy": [
+              4.510496139526367,
+              -240.4305419921875
+            ]
+          },
+          {
+            "sample_count": 7,
+            "width_meters": 8.65742540359497,
+            "height_meters": 7.138069152832031,
+            "minimum_xy": [
+              -11.378620147705078,
+              -128.985595703125
+            ],
+            "maximum_xy": [
+              -2.7211947441101074,
+              -121.84752655029297
+            ]
+          },
+          {
+            "sample_count": 4,
+            "width_meters": 5.790942668914795,
+            "height_meters": 2.973388671875,
+            "minimum_xy": [
+              -1.700312614440918,
+              -263.9869079589844
+            ],
+            "maximum_xy": [
+              4.090630054473877,
+              -261.0135192871094
+            ]
+          },
+          {
+            "sample_count": 3,
+            "width_meters": 4.0320587158203125,
+            "height_meters": 2.8823394775390625,
+            "minimum_xy": [
+              -16.351097106933594,
+              -249.9726104736328
+            ],
+            "maximum_xy": [
+              -12.319038391113281,
+              -247.09027099609375
+            ]
+          }
+        ]
+      },
+      {
+        "cell_id": 1,
+        "component_count": 14,
+        "largest_components": [
+          {
+            "sample_count": 63,
+            "width_meters": 36.99371337890625,
+            "height_meters": 34.418766021728516,
+            "minimum_xy": [
+              142.0456085205078,
+              60.614566802978516
+            ],
+            "maximum_xy": [
+              179.03932189941406,
+              95.03333282470703
+            ]
+          },
+          {
+            "sample_count": 63,
+            "width_meters": 38.327491760253906,
+            "height_meters": 41.10337829589844,
+            "minimum_xy": [
+              95.18558502197266,
+              149.66371154785156
+            ],
+            "maximum_xy": [
+              133.51307678222656,
+              190.76708984375
+            ]
+          },
+          {
+            "sample_count": 50,
+            "width_meters": 21.728843688964844,
+            "height_meters": 30.098602294921875,
+            "minimum_xy": [
+              32.22444152832031,
+              102.71061706542969
+            ],
+            "maximum_xy": [
+              53.953285217285156,
+              132.80921936035156
+            ]
+          },
+          {
+            "sample_count": 20,
+            "width_meters": 16.790751457214355,
+            "height_meters": 17.244277954101562,
+            "minimum_xy": [
+              13.472786903381348,
+              214.01527404785156
+            ],
+            "maximum_xy": [
+              30.263538360595703,
+              231.25955200195312
+            ]
+          },
+          {
+            "sample_count": 15,
+            "width_meters": 14.01163101196289,
+            "height_meters": 20.10302734375,
+            "minimum_xy": [
+              63.912662506103516,
+              64.00775146484375
+            ],
+            "maximum_xy": [
+              77.9242935180664,
+              84.11077880859375
+            ]
+          },
+          {
+            "sample_count": 12,
+            "width_meters": 19.897445678710938,
+            "height_meters": 13.256240844726562,
+            "minimum_xy": [
+              36.27524185180664,
+              214.30947875976562
+            ],
+            "maximum_xy": [
+              56.17268753051758,
+              227.5657196044922
+            ]
+          },
+          {
+            "sample_count": 7,
+            "width_meters": 8.670661926269531,
+            "height_meters": 7.1586151123046875,
+            "minimum_xy": [
+              69.88929748535156,
+              86.08038330078125
+            ],
+            "maximum_xy": [
+              78.5599594116211,
+              93.23899841308594
+            ]
+          },
+          {
+            "sample_count": 5,
+            "width_meters": 9.910801887512207,
+            "height_meters": 6.1123199462890625,
+            "minimum_xy": [
+              13.00854206085205,
+              199.24261474609375
+            ],
+            "maximum_xy": [
+              22.919343948364258,
+              205.3549346923828
+            ]
+          },
+          {
+            "sample_count": 4,
+            "width_meters": 4.884929656982422,
+            "height_meters": 6.978057861328125,
+            "minimum_xy": [
+              46.155128479003906,
+              202.0204620361328
+            ],
+            "maximum_xy": [
+              51.04005813598633,
+              208.99851989746094
+            ]
+          },
+          {
+            "sample_count": 4,
+            "width_meters": 5.491650581359863,
+            "height_meters": 2.1897735595703125,
+            "minimum_xy": [
+              6.881426811218262,
+              226.4824981689453
+            ],
+            "maximum_xy": [
+              12.373077392578125,
+              228.67227172851562
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "point_cloud_vertices": 19378,
+  "elapsed_seconds": 3.1809499599039555
+}

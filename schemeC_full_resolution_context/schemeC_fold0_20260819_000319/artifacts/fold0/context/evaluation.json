@@ -1,0 +1,27 @@
+{
+  "stage": "context",
+  "split": "validation",
+  "checkpoint": "/root/autodl-tmp/twotigers_digital_twins/schemeC_full_resolution_context/artifacts/fold0/context/best.pt",
+  "metrics": {
+    "pas": 0.507468846496546,
+    "pdp": 0.7628838478394274,
+    "nmse": 1.1152946924224043,
+    "score": 0.6026905514868919,
+    "outage_threshold": 0.999,
+    "spectrum_latent_mse_z": 0.9561364650726318,
+    "phase_latent_mse_z": 0.8852829933166504,
+    "power_mae_z": 0.49487176537513733,
+    "power_rmse_z": 0.6391716599464417,
+    "power_mae_log10": 0.9658313393592834,
+    "outage_accuracy": 0.9380530973451328,
+    "outage_precision": 0.0,
+    "outage_recall": 0.0,
+    "outage_f1": 0.0,
+    "predicted_outages": 0,
+    "router_entropy": 0.04945366084575653,
+    "router_distance_normalized": 0.5687127113342285,
+    "spectrum_warp_bins": 0.09167879074811935,
+    "detail_warp_bins": 0.1604459583759308,
+    "samples": 565
+  }
+}
