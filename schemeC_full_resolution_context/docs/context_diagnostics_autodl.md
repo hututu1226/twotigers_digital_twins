@@ -32,6 +32,8 @@ cd schemeC_full_resolution_context
 ```
 
 `git pull` 不会删除 `artifacts` 中已经训练好的忽略文件。
+正式 Fold0 的 Context `best.pt` 已通过 Git LFS 保存；`git lfs pull` 会把它从
+约 130 字节的指针文件替换成约 275 MiB 的真实权重。
 
 ## 4. 运行前检查
 

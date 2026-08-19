@@ -12,6 +12,9 @@ artifacts/fold0/autoencoder/*
 !artifacts/fold0/autoencoder/ablation.json
 !artifacts/fold0/autoencoder/quality_gate.json
 !artifacts/fold0/autoencoder/summary.json
+!artifacts/fold0/context/
+artifacts/fold0/context/*
+!artifacts/fold0/context/best.pt
 outputs/
 logs/
 incoming/
