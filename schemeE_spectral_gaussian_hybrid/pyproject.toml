@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "huawei-scheme-e-spectral-gaussian-hybrid"
+version = "0.1.0"
+description = "Spatial OOF spectral GP teacher with RF Gaussian geometry and full-resolution AE refinement"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26,<3",
+  "scipy>=1.11,<2",
+  "scikit-learn>=1.4,<2",
+  "torch>=2.2",
+]
+
+[project.optional-dependencies]
+boosting = ["xgboost>=2.0,<4", "lightgbm>=4.3,<5"]
+test = ["pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scheme_e*"]

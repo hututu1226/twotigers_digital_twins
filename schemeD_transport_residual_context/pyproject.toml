@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "huawei-scheme-d-transport-residual-context"
+version = "0.1.0"
+description = "Multi-neighbor latent transport with full-resolution gated residual refinement"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26,<3",
+  "torch>=2.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scheme_d*"]

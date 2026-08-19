@@ -1,5 +1,18 @@
 # Huawei Round 2 Physical AI Channel Generation
 
+## 0819 新方案
+
+当前新增两套基于已验证 0.9491 AE 的方案：
+
+- `schemeE_spectral_gaussian_hybrid`：八折点云条件频谱 GP + 零信道集成 + 相位初值投影 + 30,720 维全分辨率修正。
+- `schemeD_transport_residual_context`：防塌缩多邻居 Router + 几何 latent 搬运 + direct base + gated residual。
+
+AutoDL 按 Scheme E 后 Scheme D 无人值守运行的唯一总教程：
+
+- [0819 Scheme E → Scheme D AutoDL 全流程](docs/0819_schemeE_then_D_autodl.md)
+
+以下内容保留为早期基线说明。
+
 本项目针对华为算法大赛复赛任务，实现两套不依赖传统射线追踪、也不使用邻居加权或人工幅度校准的 AI 信道生成方案：
 
 1. `scheme1`：基站门控 Mixture-of-Experts + 角度-时延自编码器。

@@ -1,0 +1,154 @@
+{
+  "seed": 2026,
+  "data": {
+    "root": "artifacts/smoke_data"
+  },
+  "split": {
+    "validation_fold": 0
+  },
+  "preprocessing": {
+    "artifact_dir": "artifacts/smoke/preprocessed",
+    "context_grid_resolution": 3,
+    "environment_grid_resolution": 1,
+    "grid_margin": 3,
+    "fold_count": 5,
+    "validation_tile_meters": 12,
+    "validation_hole_meters": 5,
+    "sector_half_angle_degrees": 70,
+    "maximum_distance": 100,
+    "test_component_link_meters": 6,
+    "channel_chunk_size": 2,
+    "rf_gaussian_count": 32,
+    "corridor_samples": 8,
+    "fresnel_radius_meters": 1,
+    "spectral_fold_count": 2,
+    "spectral_tile_meters": 5,
+    "allow_small_dataset": true
+  },
+  "runtime": {
+    "device": "cpu",
+    "amp": false,
+    "workers": 0,
+    "spectral_train_limit": 32,
+    "hybrid_train_limit": 4,
+    "hybrid_validation_limit": 2,
+    "test_limit": 2
+  },
+  "autoencoder": {
+    "architecture": "factorized_residual_v4",
+    "spectrum_stem_channels": 32,
+    "phase_stem_channels": 32,
+    "spectrum_latent_channels": 64,
+    "phase_latent_channels": 32,
+    "residual_blocks": 3,
+    "detail_hidden_channels": 96,
+    "spectrum_decoder_channels": 64,
+    "detail_decoder_channels": 96,
+    "detail_gain": 2,
+    "maximum_log_power": 12,
+    "envelope_floor": 0.0001,
+    "spectrum_log_scale": 4,
+    "output_dir": "artifacts/smoke/autoencoder"
+  },
+  "encoding": {
+    "autoencoder_checkpoint": "../schemeC_full_resolution_context/artifacts/fold0/autoencoder/best.pt",
+    "output_path": "artifacts/smoke/encoded.npz"
+  },
+  "spectral": {
+    "target_path": "artifacts/smoke/channel_targets.npz",
+    "proxy_count": 24,
+    "chunk_size": 1,
+    "storage_dtype": "float16"
+  },
+  "spectral_teacher": {
+    "kernels": [
+      "rq10",
+      "rq20",
+      "matern20"
+    ],
+    "pas_latent_dim": 4,
+    "pdp_latent_dim": 3,
+    "gp_noise": 0.05,
+    "feature_length": 1,
+    "prediction_batch_size": 8,
+    "weight_grid_step": 0.5,
+    "outage_positive_weight": 2,
+    "false_kill_cost": 0.56,
+    "oof_output_path": "artifacts/smoke/spectral_teacher/oof_priors.npz",
+    "oof_report_path": "artifacts/smoke/spectral_teacher/oof_report.json",
+    "test_output_path": "artifacts/smoke/spectral_teacher/test_priors.npz",
+    "model_path": "artifacts/smoke/spectral_teacher/model.pkl",
+    "final_report_path": "artifacts/smoke/spectral_teacher/final_report.json"
+  },
+  "hybrid": {
+    "autoencoder_checkpoint": "../schemeC_full_resolution_context/artifacts/fold0/autoencoder/best.pt",
+    "condition_width": 32,
+    "spectrum_blocks": 1,
+    "detail_blocks": 1,
+    "maximum_spectrum_residual": 0.25,
+    "maximum_detail_residual": 0.25,
+    "projection_iterations": 1,
+    "projection_candidates": [
+      0,
+      1
+    ],
+    "projection_minimum_scale": 0.5,
+    "projection_maximum_scale": 2,
+    "train_decoder": false,
+    "reference_candidates": 4,
+    "reference_guard_min_meters": 0.1,
+    "reference_guard_max_meters": 1,
+    "batch_size": 1,
+    "validation_batch_size": 1,
+    "steps_per_epoch": 1,
+    "epochs": 1,
+    "learning_rate": 0.0001,
+    "weight_decay": 0,
+    "gradient_clip": 1,
+    "validation_interval": 1,
+    "checkpoint_interval": 1,
+    "early_stopping_patience": 0,
+    "minimum_delta": 0,
+    "maximum_training_hours": 0,
+    "loss_weights": {
+      "score": 1,
+      "spectrum_latent": 0.01,
+      "detail_latent": 0.01,
+      "detail_correlation": 0.01,
+      "power": 0.01,
+      "residual": 0.001
+    },
+    "output_dir": "artifacts/smoke/hybrid"
+  },
+  "hybrid_final": {
+    "initial_checkpoint": "artifacts/smoke/hybrid/best.pt",
+    "batch_size": 1,
+    "steps_per_epoch": 1,
+    "epochs": 1,
+    "learning_rate": 0.00005,
+    "weight_decay": 0,
+    "gradient_clip": 1,
+    "checkpoint_interval": 1,
+    "reference_candidates": 4,
+    "reference_guard_min_meters": 0.1,
+    "reference_guard_max_meters": 1,
+    "projection_iterations": 1,
+    "train_decoder": false,
+    "loss_weights": {
+      "score": 1,
+      "spectrum_latent": 0.01,
+      "detail_latent": 0.01,
+      "detail_correlation": 0.01,
+      "power": 0.01,
+      "residual": 0.001
+    },
+    "output_dir": "artifacts/smoke/final_hybrid"
+  },
+  "inference": {
+    "checkpoint": "artifacts/smoke/final_hybrid/best.pt",
+    "output_path": "outputs/smoke/Round2_Test_Channel.npy",
+    "report_path": "reports/generated/smoke_inference.json",
+    "batch_size": 1,
+    "projection_iterations": 1
+  }
+}

@@ -1,0 +1,8 @@
+artifacts/
+outputs/
+logs/
+packages/
+reports/generated/
+*.tar.gz
+*.tar.zst
+NO_AUTO_SHUTDOWN
