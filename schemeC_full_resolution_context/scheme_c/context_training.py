@@ -262,6 +262,8 @@ def predict_indices(
         name: np.empty(count, dtype=np.float32)
         for name in (
             "router_entropy",
+            "router_top1_mass",
+            "router_effective_neighbors",
             "router_distance",
             "spectrum_warp",
             "detail_warp",
@@ -450,6 +452,10 @@ def evaluate_context_thresholds(
                 "outage_f1": 2.0 * precision * recall / max(precision + recall, 1e-30),
                 "predicted_outages": int(predicted_outage.sum()),
                 "router_entropy": float(outputs["router_entropy"].mean()),
+                "router_top1_mass": float(outputs["router_top1_mass"].mean()),
+                "router_effective_neighbors": float(
+                    outputs["router_effective_neighbors"].mean()
+                ),
                 "router_distance_normalized": float(outputs["router_distance"].mean()),
                 "spectrum_warp_bins": float(outputs["spectrum_warp"].mean()),
                 "detail_warp_bins": float(outputs["detail_warp"].mean()),
@@ -781,6 +787,12 @@ def train_context_model(config: dict, resume: bool = False) -> dict:
             sums["mask_targets"] += float(len(mask_sample.targets))
             sums["mask_guard_meters"] += mask_sample.guard_meters
             sums["router_entropy"] += float(outputs["router_entropy"].detach().mean().cpu())
+            sums["router_top1_mass"] += float(
+                outputs["router_top1_mass"].detach().mean().cpu()
+            )
+            sums["router_effective_neighbors"] += float(
+                outputs["router_effective_neighbors"].detach().mean().cpu()
+            )
             sums["router_distance"] += float(outputs["router_distance"].detach().mean().cpu())
             sums["spectrum_warp"] += float(outputs["spectrum_warp"].detach().mean().cpu())
             sums["detail_warp"] += float(outputs["detail_warp"].detach().mean().cpu())

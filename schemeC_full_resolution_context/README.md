@@ -29,6 +29,7 @@ V2 Fold0 run can measure how much of that ceiling spatial prediction retains.
 
 - [Context V2 algorithm design](docs/context_v2_design.md)
 - [Context V2 AutoDL 5090 runbook](docs/context_v2_autodl.md)
+- [Context diagnostic experiments on AutoDL](docs/context_diagnostics_autodl.md)
 - [AE v4 failure-driven redesign](docs/ae_v4_failure_driven_redesign.md)
 - [Unattended execution and automatic shutdown](docs/overnight_autorun.md)
 

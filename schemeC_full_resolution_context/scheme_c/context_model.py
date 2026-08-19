@@ -403,14 +403,18 @@ class ObservationRouter(nn.Module):
         selected_relation = relation[batch, indices]
         target = target_context[:, None, :].expand(-1, count, -1)
         pair = self.pair(torch.cat([target, selected_observed, selected_relation], dim=2))
-        entropy = -(weights.float() * weights.float().clamp_min(1e-8).log()).sum(dim=1)
-        entropy = entropy / math.log(max(count, 2))
+        raw_entropy = -(
+            weights.float() * weights.float().clamp_min(1e-8).log()
+        ).sum(dim=1)
+        entropy = raw_entropy / math.log(max(count, 2))
         distance = selected_relation[..., 4]
         return {
             "indices": indices,
             "weights": weights,
             "pair": pair,
             "entropy": entropy,
+            "top1_mass": weights.float().amax(dim=1),
+            "effective_neighbors": raw_entropy.exp(),
             "mean_distance": (weights.float() * distance.float()).sum(dim=1),
         }
 
@@ -529,6 +533,8 @@ class GeometryWarpedLatentField(nn.Module):
         self.attention_chunk_size = int(attention_chunk_size)
         self.dropout = float(dropout)
         self.gradient_checkpointing = bool(gradient_checkpointing)
+        self.diagnostic_disable_warp = False
+        self.diagnostic_route_bias_scale = 1.0
         self.register_buffer(
             "maximum_warp",
             torch.tensor(maximum_warp, dtype=torch.float32),
@@ -619,6 +625,8 @@ class GeometryWarpedLatentField(nn.Module):
             targets, observations, *self.latent_shape
         )
         offsets = torch.tanh(self.warp(pair).float()) * self.maximum_warp
+        if self.diagnostic_disable_warp:
+            offsets = torch.zeros_like(offsets)
         _, angle_v, angle_h, delay = self.latent_shape
         normalized = torch.stack(
             [
@@ -692,6 +700,7 @@ class GeometryWarpedLatentField(nn.Module):
         latent = warped.flatten(3).permute(3, 0, 1, 2)
         positions = self._position_embedding()
         route_bias = route["weights"].float().clamp_min(1e-8).log()
+        route_bias = route_bias * float(self.diagnostic_route_bias_scale)
         pair_features = self.observed_projection(route["pair"])
         target_features = self.target_projection(target_context)
         chunks: list[torch.Tensor] = []
@@ -740,6 +749,18 @@ class GeometryWarpedLatentField(nn.Module):
 
 class FullResolutionContextField(nn.Module):
     """Context V2: routed, geometry-warped, full-resolution latent prediction."""
+
+    def set_diagnostic_ablation(
+        self,
+        *,
+        disable_warp: bool = False,
+        route_bias_scale: float = 1.0,
+    ) -> None:
+        if route_bias_scale < 0.0:
+            raise ValueError("route_bias_scale must be non-negative")
+        for field in (self.spectrum_field, self.detail_field):
+            field.diagnostic_disable_warp = bool(disable_warp)
+            field.diagnostic_route_bias_scale = float(route_bias_scale)
 
     def __init__(
         self,
@@ -1004,6 +1025,8 @@ class FullResolutionContextField(nn.Module):
             "power": scalars[:, 0],
             "outage_logit": scalars[:, 1],
             "router_entropy": route["entropy"],
+            "router_top1_mass": route["top1_mass"],
+            "router_effective_neighbors": route["effective_neighbors"],
             "router_distance": route["mean_distance"],
             "spectrum_warp": spectrum_warp,
             "detail_warp": detail_warp,

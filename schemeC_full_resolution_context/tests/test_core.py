@@ -18,6 +18,7 @@ from scheme_c.autoencoder import (
 from scheme_c.autoencoder_training import autoencoder_training_stage
 from scheme_c.context_model import CellTokenPool, FullResolutionContextField
 from scheme_c.context_data import ContextRepository
+from scheme_c.context_diagnostics import hybrid_predictions, nearest_observed_indices
 from scheme_c.data import balanced_limit
 from scheme_c.losses import (
     complex_coherence_loss,
@@ -206,6 +207,55 @@ class AngleDelayTests(unittest.TestCase):
 
 
 class SpatialAndContextTests(unittest.TestCase):
+    def test_nearest_observations_stay_inside_the_serving_cell(self) -> None:
+        positions = np.asarray(
+            [
+                [0.0, 0.0],
+                [2.0, 0.0],
+                [1.8, 0.0],
+                [100.0, 0.0],
+                [104.0, 0.0],
+                [103.5, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        cells = np.asarray([0, 0, 0, 1, 1, 1])
+        nearest, distances = nearest_observed_indices(
+            positions,
+            cells,
+            observed_indices=np.asarray([0, 1, 3, 4]),
+            target_indices=np.asarray([2, 5]),
+            neighbors=2,
+        )
+        self.assertEqual(nearest.tolist(), [[1, 0], [4, 3]])
+        self.assertTrue(np.allclose(distances[:, 0], [0.2, 0.5], atol=1e-5))
+
+    def test_hybrid_predictions_replace_only_requested_components(self) -> None:
+        predicted = {
+            "spectrum": np.full((2, 3), 1.0, dtype=np.float32),
+            "phase": np.full((2, 4), 2.0, dtype=np.float32),
+            "power": np.full(2, 3.0, dtype=np.float32),
+            "outage_probability": np.full(2, 0.2, dtype=np.float32),
+        }
+        target = {
+            "spectrum": np.full((2, 3), 10.0, dtype=np.float32),
+            "phase": np.full((2, 4), 20.0, dtype=np.float32),
+            "power": np.full(2, 30.0, dtype=np.float32),
+            "outage": np.asarray([0.0, 1.0], dtype=np.float32),
+        }
+        hybrid = hybrid_predictions(
+            predicted,
+            target,
+            replacements=("phase", "power"),
+            oracle_outage=True,
+        )
+        self.assertTrue(np.array_equal(hybrid["spectrum"], predicted["spectrum"]))
+        self.assertTrue(np.array_equal(hybrid["phase"], target["phase"]))
+        self.assertTrue(np.array_equal(hybrid["power"], target["power"]))
+        self.assertTrue(
+            np.array_equal(hybrid["outage_probability"], target["outage"])
+        )
+
     def test_grid_offsets_and_sampling_coordinates(self) -> None:
         spec = GridSpec(10.0, 20.0, 3.0, height=2, width=4)
         centers = np.asarray([[11.5, 21.5], [20.5, 24.5]], dtype=np.float32)
@@ -313,9 +363,45 @@ class SpatialAndContextTests(unittest.TestCase):
         self.assertEqual(outputs["power"].shape, (2,))
         self.assertEqual(outputs["outage_logit"].shape, (2,))
         self.assertEqual(outputs["router_entropy"].shape, (2,))
+        self.assertEqual(outputs["router_top1_mass"].shape, (2,))
+        self.assertEqual(outputs["router_effective_neighbors"].shape, (2,))
         self.assertEqual(outputs["router_distance"].shape, (2,))
         self.assertEqual(outputs["spectrum_warp"].shape, (2,))
         self.assertEqual(outputs["detail_warp"].shape, (2,))
+        self.assertTrue(torch.all(outputs["router_top1_mass"] > 0.0))
+        self.assertTrue(torch.all(outputs["router_effective_neighbors"] >= 1.0))
+        model.set_diagnostic_ablation(disable_warp=True, route_bias_scale=0.25)
+        ablated = model(
+            cell_id=1,
+            observed_spectrum=torch.randn(3, 4, 1, 2, 1),
+            observed_phase=torch.randn(3, 2, 2, 4, 2),
+            observed_power=torch.randn(3),
+            observed_outage=torch.tensor([0.0, 0.0, 1.0]),
+            point_features=torch.randn(3, 4),
+            point_flat_indices=torch.tensor([0, 0, 7]),
+            context_static=torch.randn(11, 7, 9),
+            environment_bev=torch.randn(6, 13, 17),
+            observed_context_coordinates=torch.tensor(
+                [[-0.6, -0.5], [0.0, 0.0], [0.5, 0.4]]
+            ),
+            observed_environment_coordinates=torch.tensor(
+                [[-0.5, -0.4], [0.1, 0.0], [0.4, 0.3]]
+            ),
+            observed_numeric=torch.randn(3, 9),
+            observed_relative_xy=torch.randn(3, 2),
+            query_context_coordinates=torch.tensor([[-0.5, -0.5], [0.2, 0.4]]),
+            query_environment_coordinates=torch.tensor([[-0.4, -0.5], [0.3, 0.4]]),
+            query_corridor_coordinates=torch.tensor(
+                [
+                    [[-0.9, -0.9], [-0.6, -0.6], [-0.4, -0.5]],
+                    [[-0.9, -0.9], [-0.3, -0.2], [0.3, 0.4]],
+                ]
+            ),
+            query_numeric=torch.randn(2, 9),
+            query_relative_xy=torch.randn(2, 2),
+        )
+        self.assertEqual(float(ablated["spectrum_warp"].max()), 0.0)
+        self.assertEqual(float(ablated["detail_warp"].max()), 0.0)
         sum(value.square().mean() for value in outputs.values()).backward()
         gradients = [
             parameter.grad
