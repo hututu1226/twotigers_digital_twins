@@ -1,0 +1,16 @@
+artifacts/
+outputs/
+logs/
+packages/
+reports/generated/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+configs/fold0_selected.json
+configs/fold0_attempt2.json
+configs/fold0_best.json
+configs/final_selected.json
+*.tar.gz
+*.tar.zst
+NO_AUTO_SHUTDOWN

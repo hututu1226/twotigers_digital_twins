@@ -1,240 +1,210 @@
-# Scheme F 实验与实现计划
+# Scheme F 实验、自动化与验收计划
 
-## 1. 实现原则
+## 1. 已确认执行边界
 
-Scheme F 的实现应从 Scheme C 的 AE 和 Scheme E 的几何/频谱预处理复用稳定代码，但新建独立包，不直接修改 Scheme C/D/E。计划目录：
+- 使用 RTX 5090；参考价格上限 `3 元/小时`。
+- GPU 计费预算最多约 12 小时。
+- 正式 Scheme F Fold0 最多两次：一次主实验和一次根据指标定向修改的修复实验。
+- Fold0 `<0.63` 但结果有限、稳定时，仍完成 4000 条 full-data final 和 500 条测试推理；报告必须标记“不建议提交”。
+- NaN/Inf、权重损坏、输出格式错误、单基站 NMSE `>10` 或持续 OOM 时停止，保留并打包已有证据。
+- D/E 现有源码、权重和结果只读，不覆盖。
+
+## 2. 实际目录
 
 ```text
 schemeF_query_adaptive_operator_fusion/
   configs/
     smoke.json
     fold0_5090.json
-    three_fold_5090.json
+    final_5090.json
+    fold0_selected.json       # D/E 扫描后生成
+    fold0_attempt2.json       # 必要时生成
+    fold0_best.json           # 两次 Fold 自动选优后生成
+    final_selected.json       # 根据最佳 epoch/推理策略生成
   scheme_f/
-    data.py
-    radio_chart.py
-    geometry_operator.py
-    anchor_retrieval.py
-    latent_transport.py
-    token_router.py
-    neural_operator.py
-    power_cnp.py
-    outage.py
-    model.py
-    training.py
-    inference.py
-    metrics.py
+    preprocessing.py          # 双基站、BEV、RF Gaussian 71维特征
+    context_data.py           # latent/OOF prior/同基站集合
+    context_model.py          # chart、Top8、regional warp、token Top2、operator、PowerCNP
+    context_training.py       # 训练、验证、checkpoint、推理策略
+    projection.py             # 保功率 PAS/PDP soft projection
+    inference.py              # 500 条流式输出
   scripts/
-    check_environment.py
-    diagnose_existing_models.py
-    preprocess.py
-    train_fold.py
-    evaluate.py
-    prepare_final_config.py
-    train_final.py
-    infer.py
-    verify_completion.py
-    package_results.sh
-    run_smoke.sh
+    prepare_shared_assets.sh
+    run_legacy_scans.sh
+    run_fold_attempt.sh
     run_all_5090.sh
     run_unattended.sh
-  tests/
+    package_results.sh
   docs/
+  tests/
 ```
 
-所有手工选择必须转成配置或 OOF 自动选择，正式无人值守脚本中间不得要求用户输入。
+## 3. 自动流水线阶段
 
-## 2. 第一部分：现有模型融合诊断
+`run_unattended.sh` 调用 `run_all_5090.sh`，串行执行：
 
-在训练 Scheme F 前，由脚本从 Scheme C/D/E Fold0 checkpoint 重新生成逐样本缓存。必须测试：
+1. 从 `/root/autodl-fs` 复用 Scheme C AE 与 Scheme E priors；缺失时自动重建 E OOF/test priors。
+2. 校验 CUDA、数据、磁盘和 LFS 权重不是 100 多字节 pointer。
+3. Scheme D Router 只读扫描。
+4. Scheme E outage/power 只读扫描。
+5. 生成 `configs/fold0_selected.json`。
+6. 运行单元测试和 GPU 小样本端到端冒烟。
+7. 运行 Fold0 attempt 1，自动扫描 outage 和 spectral prior 策略。
+8. 根据 attempt 1 指标决定是否运行唯一一次 attempt 2。
+9. 选出最高 Score，建立 canonical `artifacts/fold0/context`。
+10. 计算全体、BS0、BS1 breakdown。
+11. 根据最佳 checkpoint epoch 生成 final config。
+12. 用全部 4000 条训练，无 validation 数据被保留。
+13. 生成 500 条 `Round2_Test_Channel.npy`。
+14. 校验 shape、dtype、finite、checkpoint 和报告。
+15. 打包、SHA256、复制到持久盘。
+16. 成功或失败均按启动参数自动关机。
 
-| 编号 | 复数形状 | 总功率 | 频谱约束 | 目的 |
-| --- | --- | --- | --- | --- |
-| X0 | Scheme C | Scheme C | 无 | 复现 0.6027 |
-| X1 | Scheme D | Scheme D | 无 | 复现 0.5960 |
-| X2 | Scheme E | Scheme D | 单位能量 soft prior | 测频谱与稳定功率组合 |
-| X3 | Scheme D | 新 PowerCNP oracle-free | 无 | 测功率改进贡献 |
-| X4 | Scheme D | Scheme D | E PAS only | 测 PAS prior 独立贡献 |
-| X5 | Scheme D | Scheme D | E PDP only | 测 PDP prior 独立贡献 |
-| X6 | per-sample D/E oracle | 各自 | 各自 | 仅估计互补上限，不用于提交 |
+中间没有人工输入点；重复运行会复用已完成阶段或从 `last.pt` 恢复。
 
-这里的 oracle 只用于诊断：使用真值为每条验证样本挑较好的旧模型，不能进入正式推理。若 X6 仍低于 `0.65`，说明仅融合旧输出没有足够上限，必须依赖新的 transport/operator。
+## 4. D/E 诊断的用途
 
-预估时间：5090 `10--25` 分钟；CPU 约 `40--120` 分钟。
+### 4.1 Scheme D
 
-## 3. 第二部分：代码级和小样本冒烟
+固定同一份权重和验证子集，扫描：
 
-冒烟测试使用少量样本但覆盖完整链路：
+- 重载错误温度；
+- 推断的 checkpoint 温度；
+- Top16；
+- Top8；
+- Top8 + no-warp。
 
-1. 点云 Gaussian token 和 71 维旁路；
-2. 两个基站候选严格隔离；
-3. chart OOF 不泄漏；
-4. Top8/每 token Top2；
-5. Spectrum/Detail 位移场尺寸正确；
-6. phasor 有限且单位模；
-7. 30,720 latent 无全连接瓶颈；
-8. PowerCNP 分位数有序；
-9. outage 关闭/开启均可推理；
-10. AE 解码输出 `[B,256,4,192]` complex；
-11. 16 条训练、验证、推理、报告和打包全链路；
-12. 断点续跑和失败状态码真实反映结果。
+这些是 inference-only counterfactual，不能冒充重新训练后的分数。用途是决定 F 是否收紧 warp 范围，并确认温度恢复问题的实际影响。
 
-必须增加的回归测试：
+### 4.2 Scheme E
 
-- `validation_fold=null` 的 final 配置；
-- 报告同时兼容顶层和 `metrics` 嵌套字段；
-- `SHUTDOWN_ON_SUCCESS=0` 时成功脚本返回 0；
-- LFS pointer 不能被误当权重；
-- 任一 BS NMSE 非有限或大于安全阈值时 final gate 失败；
-- 输出归一化后频谱约束不得改变总功率。
+固定同一 Hybrid 权重，比较：
 
-预估时间：5090 `5--10` 分钟。
+- baseline；
+- oracle outage；
+- oracle power；
+- oracle outage + power；
+- oracle-free、按基站真值训练分布截断的 GP power；
+- bounded GP power + oracle outage。
 
-## 4. 第三部分：一次上卡自动消融
+Oracle 只定位上限，不能进入 final。若 power oracle 增益大，F 自动提高 PowerCNP/quantile 权重并收紧范围；若 outage oracle 增益大，自动加强 BCE 和 positive weight。
 
-用户不需要分阶段守在电脑前。`run_all_5090.sh` 自动串行执行以下短实验，并把结果写入统一矩阵：
+## 5. Fold0 attempt 1
 
-| 实验 | 改动 | 最大时间 | 继续门槛 |
-| --- | --- | ---: | --- |
-| A0 | Top1 anchor，无 transport | 20 min | 诊断基线 |
-| A1 | chart Top8 + token Top2，无 transport | 30 min | PAS/PDP 高于 A0 |
-| A2 | A1 + 低秩位移 | 35 min | 搬运单锚点 loss 明显下降 |
-| A3 | A2 + complex phasor | 40 min | NMSE 改善且不伤 PAS |
-| A4 | A3 + soft PAS/PDP prior | 30 min | Score 至少再升 0.01 |
-| A5 | A4 + PowerCNP/outage | 30 min | 两个 BS NMSE 均有限且 < 3 |
-
-短实验使用相同固定验证集合和相同训练预算，只用于判断模块方向。最高分完整配置随后从头做正式 Fold，不把多个短实验 checkpoint 拼接成 final。
-
-若 A2/A3 完全无收益，正式配置自动退回 token Top2 operator，不强行保留无效 Warp。若 soft prior 在 BS1 降分，门控可以对 BS1 自动关闭，而不是全局放弃频谱教师。
-
-## 5. 第四部分：正式三折训练
-
-### 5.1 划分
-
-- 至少 3 个空间折；
-- 每折都按 BS 和最近支持距离分层；
-- validation 洞形分布匹配测试连通分量；
-- 每折报告全体、BS0、BS1、`0--6 m`、`6--12 m`、`12+ m`；
-- 训练过程中所有 teacher 输入使用 OOF 预测。
-
-### 5.2 收敛控制
-
-- `max_epochs`: 1500--2000；
-- 每 5 epoch 解码完整 validation；
-- ReduceLROnPlateau 以 Score 为准；
-- early stopping 至少观察 40 次 validation；
-- 最小改进阈值不大于 `5e-5`；
-- 单折最大墙钟 2 小时；
-- 保存 best、last 和最近 3 个周期性 checkpoint；
-- 发生 NaN、BS NMSE > 10 或 power P99 爆炸立即停止该折并标记失败。
-
-### 5.3 正式门槛
-
-| 等级 | 条件 | 决策 |
-| --- | --- | --- |
-| FAIL | 任一折 < 0.61 或任一 BS NMSE > 3 | 不跑 final |
-| WEAK | 三折均值 0.61--0.63 | 仅保留分析包 |
-| PROMISING | 三折均值 0.63--0.65 | 可继续一次定向修正 |
-| STRONG | 三折均值 0.65--0.68，最差折 >= 0.63 | 运行 final |
-| TARGET | 三折均值 >= 0.68，至少一折 >= 0.70 | 作为 0.70 主攻候选 |
-
-不能因为训练 loss 下降就绕过这些门槛。
-
-## 6. 第五部分：4000 条 final 与测试生成
-
-三折通过 STRONG 门槛后自动执行：
-
-1. 由三折最佳 epoch 的中位数和收敛曲线确定 final epoch；
-2. 用全部 4000 条重新拟合 chart、teacher、PowerCNP 和 Context；
-3. 保持三折确定的超参数，不在测试点上再调；
-4. 对 500 个测试点推理；
-5. 分别保存 no-outage 和 conservative-outage 两个候选输出；
-6. 由 OOF 规则指定主输出，不人工查看测试结果后选择；
-7. 校验 shape、dtype、NaN/Inf、exact-zero 数量、功率分位数和 BS 数量；
-8. 生成模型卡、实验报告、SHA256 和压缩包。
-
-主输出必须为：
+默认正式配置：
 
 ```text
-outputs/final/Round2_Test_Channel.npy
-shape = [500, 256, 4, 192]
-dtype = complex64
+Context parameters          约 19.19M
+Router candidates           Top8
+Per-token anchors           Top2
+Steps per epoch             48
+Maximum epochs              1500
+Validation interval         5 epochs
+Early stopping patience     100 epochs
+Minimum score delta         5e-5
+Maximum wall time           3.25 h
+AE decoder                  fixed
 ```
 
-## 7. 5090 实测基础上的时间预算
+最大 epoch 是保护上限，不是预估收敛 epoch。真正停止条件是验证早停或墙钟上限。
 
-已测参考：
+## 6. 唯一一次 attempt 2
 
-- Scheme D Fold0 约 49.6 分钟，final 约 36.0 分钟；
-- Scheme E Fold0 Hybrid 约 10.4 分钟，final Hybrid 约 4.9 分钟；
-- 两套完整无人值守任务总墙钟约 1 小时 57 分钟。
+只有 attempt 1 `<0.66` 才运行。修复规则由指标触发：
 
-Scheme F 的 per-token Top2、低秩场和神经算子比 Scheme D 更重，预算为：
+- NMSE `>0.9`：加大 power/quantile loss，收紧 PowerCNP z 范围。
+- PAS 明显落后 PDP：提高 chart、Spectrum latent loss。
+- token effective neighbors `<1.2`：提高温度和 token diversity，避免过早 Top1。
+- Detail warp 几乎为零：缩小 warp 上限并降低 saturation 正则。
 
-| 阶段 | 5090 预计 |
-| --- | ---: |
-| 现有模型融合诊断 | 10--25 min |
-| 预处理/OOF/chart cache | 10--25 min |
-| 冒烟与代码检查 | 5--10 min |
-| 自动短消融 | 1.5--2.5 h |
-| 3 个正式空间折 | 3--5 h |
-| 4000 条 final | 45--90 min |
-| 测试、报告、打包、校验 | 10--25 min |
-| 合计 | 5.5--9 h |
+attempt 2 使用不同 seed、较低学习率、至少 56 steps/epoch、最多 3 小时。不会继续产生第三次实验。
 
-如果只跑 Fold0 进行首轮可行性验证，预计 `1.5--2.5` 小时。完整三折加 final 可能略超过 8 小时，因此无人值守脚本应提供 `FAST=1` 和 `FULL=1`：FAST 在单折不过 `0.63` 时直接停止并关机；FULL 仅在门槛通过后自动继续。
+## 7. 自动推理策略扫描
 
-## 8. 无人值守流程契约
-
-未来实现的入口应只有一条：
-
-```bash
-bash scripts/run_unattended.sh --mode full --shutdown-on-success
-```
-
-脚本必须：
-
-- 启动前检查 GPU、磁盘、数据、AE 权重和 LFS pointer；
-- 每阶段写状态文件和独立日志；
-- 可从最后完成阶段继续；
-- 失败时不删除中间权重；
-- 只有 NPY、报告、归档和 SHA256 全部验证通过才视为成功；
-- 成功自动关机；
-- 失败默认保留实例 15 分钟后关机，并在状态文件写明失败阶段；
-- shutdown 开关关闭时仍返回正确的成功退出码。
-
-## 9. 结果包内容
-
-结果包至少包含：
+模型权重固定后，只推理 Context 一次，再复用 latent 预测扫描：
 
 ```text
-configs/
-artifacts/folds/*/best.pt
-artifacts/final/best.pt
-artifacts/*/summary.json
+hard outage threshold: 0.2, 0.4, 0.6, 0.75, 0.85, 0.92, 0.97, 0.99, 0.999
+soft outage strength:   0, 0.5, 0.75, 1.0
+spectral prior alpha:   0, 0.15, 0.30
+```
+
+同分时优先更高 outage threshold，减少误杀。最佳三元组写入 `outage_scan.json` 并复制到 final config。
+
+## 8. 安全门槛
+
+### 8.1 硬失败
+
+- 任一关键 loss、PAS、PDP、NMSE、Score 为 NaN/Inf；
+- AE/Context 权重是 LFS pointer 或小于合理尺寸；
+- BS0 或 BS1 NMSE `>10`；
+- 最终数组不是 `[500,256,4,192] complex64`；
+- 数组包含 NaN/Inf；
+- 打包或 SHA256 校验失败。
+
+### 8.2 结果等级
+
+```text
+Score < 0.63   完成 final，但标记“不建议提交”
+0.63--0.65     有改进，仍需谨慎
+0.65--0.68     有竞争力，建议做多折复核
+>= 0.68        接近 0.70 目标，优先提交候选
+```
+
+输出格式通过只代表工程链路通过，不代表竞赛分数通过。
+
+## 9. 5090 时间预算
+
+时间取决于旧缓存是否保留、实际每 epoch 秒数和早停位置：
+
+| 阶段 | 有缓存 | 无缓存 |
+|---|---:|---:|
+| E prior 复用/重建 | 1--3 min | 15--40 min |
+| D/E 诊断 | 8--25 min | 缺权重时跳过并记录 |
+| GPU 冒烟 | 2--8 min | 2--8 min |
+| Fold0 attempt 1 | 0.8--3.25 h | 0.8--3.25 h |
+| attempt 2（按需） | 0--3.0 h | 0--3.0 h |
+| full-data final | 0.6--3.0 h | 0.6--3.0 h |
+| 推理、报告、压缩 | 10--35 min | 10--35 min |
+| 总计常见范围 | 2.5--7.5 h | 3--8.5 h |
+
+最坏保护上限接近 10 小时，加上下载/异常余量仍控制在已确认的 12 小时 GPU 预算内。时间是工程估计，不是保证。
+
+## 10. 最终产物
+
+```text
+artifacts/fold0/context/best.pt
+artifacts/fold0/context/evaluation.json
+artifacts/fold0/context/outage_scan.json
+artifacts/final/context/final.pt
 outputs/final/Round2_Test_Channel.npy
 outputs/final/Round2_Test_Channel.json
-reports/generated/ablation_matrix.json
-reports/generated/fold_breakdown.json
-reports/generated/final_completion.json
-reports/generated/SCHEME_F_EXPERIMENT_REPORT.md
-logs/unattended.log
-manifest.sha256
+reports/generated/scheme_d_scan.json
+reports/generated/scheme_e_scan.json
+reports/generated/fold_attempt_selection.json
+reports/generated/fold0_breakdown.json
+reports/generated/schemeF_fold0_EXPERIMENT_REPORT.md
+reports/generated/schemeF_final_EXPERIMENT_REPORT.md
+schemeF_results_YYYYMMDD_HHMMSS.tar.gz
+schemeF_results_YYYYMMDD_HHMMSS.tar.gz.sha256
 ```
 
-权重和 NPY 使用 Git LFS 或 AutoDL 文件存储传输。普通源代码提交不包含训练产物；下载归档保存在根目录已忽略的 `autodl_results/`。
+持久盘默认目录：`/root/autodl-fs/schemeF_latest`。即使实例关机，该目录仍用于重新下载；实际保留策略以 AutoDL 当前产品规则为准。
 
-## 10. 实现完成定义
+## 11. 当前验证状态
 
-Scheme F 只有同时满足以下条件才算“实现完成”：
+本地已完成：
 
-1. 单元测试和 CPU shape test 通过；
-2. GPU 冒烟完整跑通；
-3. 现有 C/D/E 诊断可复现主要指标；
-4. 自动消融有统一报告；
-5. 至少一个完整空间折训练和评估成功；
-6. 全量训练、500 条测试生成、打包可一条命令串行完成；
-7. 关机脚本状态码经过回归测试；
-8. 算法说明书、AutoDL 运行说明书和实验报告模板齐全。
+- 26 个单元测试；
+- CPU 小样本预处理、AE、encoding、Context、inference；
+- 小样本输出 `[2,256,4,192] complex64`；
+- architecture full-resolution check；
+- spectral projection 保功率测试。
 
-未达到 Fold 分数门槛不等于代码没完成，但必须在报告中明确写为“算法验证未通过”，不得用输出格式通过代替准确率结论。
+尚未完成并必须由本次 5090 任务给出的证据：
+
+- D/E 云端扫描报告；
+- Scheme F GPU smoke；
+- 正式 Fold0 分数；
+- 4000 条 final 权重；
+- 500 条最终测试 NPY。

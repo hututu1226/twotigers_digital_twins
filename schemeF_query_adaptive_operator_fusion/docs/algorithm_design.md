@@ -1,363 +1,258 @@
-# Scheme F 算法设计说明书
+# Scheme F 算法设计与实现说明书
 
-## 1. 一句话结论
+## 1. 结论先说
 
-Scheme F 不再让模型在“只抄一个邻居”和“平均四十多个邻居”之间二选一，而是先预测目标点属于哪一种无线传播局部，再选 4--8 个合适锚点；每个角度/时延 token 只融合其中最可靠的 1--2 个，并在融合前学习多径位移和复相位变化。
+Scheme C 的 AE 已经能把真实信道压缩后还原到 `0.9491`，所以 Scheme F 不再改 AE。真正的问题是：测试位置没有真实信道，Context 必须从坐标、环境和同基站观测中预测 30,720 维 latent。
 
-它保留 Scheme C 的高质量 AE，吸收 Scheme E 有效的 PAS/PDP 先验，但禁止频谱先验直接控制绝对功率。目标是同时改善 PAS、PDP 和 NMSE，而不是靠某一个指标单独拉分。
+Scheme F 的做法不是把 30,720 维再次压成几百维，也不是平均几十个邻居，而是：
 
-## 2. 为什么不是简单扩大 Scheme D/E
+1. 用坐标、71 维 RF Gaussian 几何和 Scheme E 的 OOF PAS/PDP 先验描述目标点；
+2. 在同一基站的观测里检索 Top8 锚点；
+3. 对不同 angle-delay token 分别选 Top2 锚点；
+4. 在融合前学习区域位移和 Detail 成对通道旋转；
+5. 在原尺寸 latent 网格上用局部 3D 卷积、低频 Fourier mixing 和轴向注意力修正；
+6. 用独立、按基站分头、有界的 PowerCNP 预测功率；
+7. 用验证集自动选择 PAS/PDP 软约束、soft outage 和 exact-zero threshold。
 
-### 2.1 Scheme D 证明“更多邻居”不等于“更多信息”
+这仍是一个需要上卡验证的新模型。`0.70` 是目标，不是承诺。
 
-Scheme D 的有效邻居从约 1--2 个增加到 `41.98`，但 Score 从 Scheme C 的 `0.6027` 降到 `0.5960`。原因是不同邻居可能位于不同墙面、街角或遮挡区域，其多径峰值出现在不同角度和时延。没有对齐就平均，相当于把多个清晰峰值摊成宽峰，PAS 下降。
+## 2. 已知事实与设计依据
 
-### 2.2 Scheme E 证明“频谱先验有用，但功率必须独立”
+### 2.1 AE 不是当前第一瓶颈
 
-Scheme E 的 OOF 频谱教师达到 PAS/PDP `0.6009/0.7695`，说明点云和坐标可以预测一部分粗信道形状。但 BS1 NMSE 达到 `966.82`，说明把 GP 功率、UE 能量和多轮投影直接串联会放大误差。
-
-### 2.3 一个全局 Warp 不足以搬运多径
-
-同一个邻居信道中可能有直达、墙面反射和地面反射。目标位置变化时，这些簇并不会以完全相同的角度和时延偏移。Scheme D 每个邻居只预测近似全局三轴位移，实测 Detail 仅移动 `0.146` bin，模型基本放弃使用 Warp。
-
-Scheme F 改成低秩位移场和复相位场：不同 angle-delay 区域可产生不同的平滑位移，但参数量仍受控。
-
-## 3. 评分目标倒推
-
-评分公式：
+Scheme C AE Fold0：
 
 ```text
-Score = 0.4 * PAS + 0.4 * PDP + 0.2 / (1 + NMSE)
+PAS   0.961609
+PDP   0.954555
+NMSE  0.095132
+Score 0.949092
 ```
 
-达到 `0.70` 的一组可行组合是：
+因此 Scheme F 固定该 AE decoder，Context 训练时 `train_decoder=false`。否则，噪声 latent 可能反向破坏已验证的 decoder ceiling。
+
+### 2.2 Scheme D 的问题是过度平均
+
+Scheme D Fold0 约为 `0.5960`，有效邻居约 `41.98`。路由不再 Top1 塌缩，但多个没有充分对齐的多径峰被平均后，PAS 反而模糊。
+
+另外还发现一个确定性实现问题：Scheme D 的 router temperature 是普通 Python 属性，没有写入 `state_dict`。训练时最佳温度与重新加载后的初始温度不同。Scheme F 使用持久 buffer，并在 checkpoint 顶层再次记录温度。
+
+### 2.3 Scheme E 的长处和致命短板
+
+Scheme E OOF teacher 的 PAS/PDP 为 `0.6009/0.7695`，说明 71 维点云几何与 GP 粗频谱先验有价值。但 BS1 NMSE 达到 `966.82`，说明 GP 功率、outage 漏判与多轮投影串联后存在灾难性尾部。
+
+因此 Scheme F：
+
+- 接收 PAS/PDP、uncertainty、GP power 和 outage probability 作为输入特征；
+- PAS/PDP 只能轻度修改单位能量形状；
+- 修改前后强制恢复每个样本的原总功率；
+- GP power 不能直接成为最终幅度；
+- 最终功率只由有界 PowerCNP 输出。
+
+## 3. 双基站数据边界
+
+基站归属由预处理阶段根据两组坐标区域推断，并与 `Round2_Setup.json` 中基站位置对应。此后所有候选由 `ContextRepository.indices_by_cell` 分组，目标点只会看到同基站观测。
+
+共享部分：
+
+- BEV、corridor、latent operator 主干；
+- Router 和 chart predictor。
+
+按基站独立部分：
+
+- latent 与功率标准化统计；
+- station embedding；
+- PowerCNP 最终输出头；
+- Fold0 BS0/BS1 指标报告。
+
+## 4. 输入特征
+
+### 4.1 71 维 RF Gaussian 几何
+
+从 PLY 三角面片重建法向、面积、切向尺度和法向厚度，聚合为最多 10,070 个各向异性 Gaussian。对 UE 与 BS-UE corridor 提取：
+
+- 坐标、距离、方位和基站 one-hot；
+- 2/4/8/16 m 局部表面密度、高度、法向和厚度；
+- corridor density、clearance、Fresnel 多尺度统计和 facing。
+
+这些是静态几何描述，不发射射线、不枚举反射路径，也不执行传统射线追踪。正式配置可直接复用 Scheme E 兼容的 metadata，避免重复计算。
+
+### 4.2 Scheme E OOF 频谱先验
+
+训练样本只读取八折 OOF 预测，测试样本读取 full-data teacher 预测，防止训练点通过自身信道泄漏标签。
+
+原始 PAS/PDP 不直接塞进大 MLP，而压成 168 维统计：
 
 ```text
-PAS  = 0.65
-PDP  = 0.80
-NMSE = 0.60
-Score = 0.705
+PAS: 24 个代理的 mean/std + 全频 mean = 96
+PDP: 每 UE 分成 16 个 delay bin        = 64
+UE energy                              = 4
+power/uncertainty/outage/available     = 4
+总计                                  = 168
 ```
 
-因此 Scheme F 的 Fold0 目标为：
+每个基站用训练 OOF 统计独立标准化。
 
-- PAS：`>= 0.65`；
-- PDP：`>= 0.80`；
-- NMSE：`<= 0.60`；
-- Score：`>= 0.70`。
+### 4.3 学习型环境特征
 
-这是设计目标，不是结果承诺。工程上的继续投入门槛是先稳定超过 `0.63`，再以多折验证确认是否接近 `0.70`。
+原有 1 m BEV 经过 ConvNeXt 风格 feature pyramid；BS 到 UE 的走廊序列经过 Transformer。目标 query 和观测 anchor 均采样局部环境特征。
 
-## 4. 总体数据流
+## 5. 无线图谱与 Top8 检索
+
+Anchor chart 不是最终信道瓶颈。它只用于找锚点：
+
+- 从真实 Spectrum/Detail latent 分别计算分段 mean 和 RMS；
+- 拼成 64 维单位向量；
+- query 端根据坐标、几何、OOF 频谱先验预测同维向量；
+- 用 cosine chart similarity、query-key 相似度和相对几何共同排序；
+- 只保留 Top8。
+
+训练增加 query chart 与目标真实 chart 的 cosine distillation loss。Top8 是候选池，不表示把 8 个完整信道平均。
+
+这借鉴了 channel charting 利用 CSI 相似关系组织无线空间的思想，但最终生成仍保留完整 latent 网格。[Channel Charting-Based Channel Prediction](https://arxiv.org/abs/2410.11486)
+
+## 6. 区域 Transport
+
+### 6.1 低秩位移场
+
+旧模型每个 anchor 只有一个三轴位移。Scheme F 对 angle-v、angle-h、delay 三条轴分别预测可分控制量，相加形成每个 token 的三轴位移场：
 
 ```text
-同基站训练观测集合                         目标位置
-  | latent / PAS / PDP / power                | 坐标 / 点云环境
-  v                                           v
-无线图谱编码器                         OOF 频谱教师 + 查询编码器
-  | anchor chart embedding                    | predicted chart embedding
-  +---------------- 候选检索与粗路由 ----------+
-                         |
-                    Top 4--8 anchors
-                         |
-       +-----------------+-----------------+
-       |                                   |
-Spectrum latent                        Detail latent
-[64,2,4,12]                           [32,4,8,24]
-       |                                   |
-低秩位移场                            低秩位移 + 单位复相位场
-       |                                   |
-逐 token Top2 锚点融合                  逐 token Top2 锚点融合
-       +-----------------+-----------------+
-                         |
-              局部卷积 + Fourier 神经算子
-                         |
-                 有界 residual latent
-                         |
-                   固定 AE decoder
-                         |
-单位能量复数信道形状 <---- 不确定度门控 PAS/PDP 软约束
-                         |
-                 独立 PowerCNP 乘回总功率
-                         |
-                 高精度 outage 最终门控
-                         |
-                  [256,4,192] complex64
+offset(v,h,d) = global + f_v(v) + f_h(h) + f_d(d)
 ```
 
-## 5. 双基站处理
+位移经过 `tanh` 和每轴上限约束，再由 `grid_sample` 搬运完整 latent。控制层零初始化，模型开始时不会随机扭曲信道。
 
-基站识别沿用已经验证的坐标分区，但所有以下模块均按 BS0/BS1 分开：
+### 6.2 Detail 成对通道旋转
 
-- 无线图谱原型和检索索引；
-- 频谱先验标准化与不确定度校准；
-- PowerCNP 输出头；
-- outage 概率校准；
-- 验证报告和阈值选择。
+Detail 32 个 latent channels 前后各 16 个组成成对表示。网络预测同样可分的 angle-delay rotation field，并执行二维旋转。rotation 初始为零，因此只有数据证明有用时才逐渐启用。
 
-主干神经算子可以共享参数，并使用基站 embedding；容易出现尺度偏差的输出头不共享。任何锚点都不得跨基站进入候选集。
+这不是根据手工路径公式计算相位，而是完全由训练数据学习的 latent 变换。
 
-## 6. 模块 A：无线图谱检索
+## 7. 每 token Top2 融合
 
-### 6.1 为什么需要无线图谱
+对每个 latent token、每个 attention head，模型对 Top8 anchor 计算 logits，只保留最高两个再 softmax。于是：
 
-几何上最近不代表传播结构最像。墙的另一侧可能只差 2 m，却属于完全不同的角度簇；同一走廊内相距 8 m 的点反而更像。
+- 主径 token 可以参考 anchor A；
+- 另一段反射 token 可以参考 anchor B；
+- 不会把 8 个 anchor 的所有峰统一平均；
+- token base 直接由搬运后的完整 latent 计算，不经过全 latent 线性层。
 
-无线图谱（radio chart）把每条训练信道编码成 64 维单位向量，使传播结构相似的样本靠近。它不是把 30,720 维 latent 压缩后再复原，而只用于“找合适锚点”。最终信道仍由完整 latent 网格生成。
+报告记录 Spectrum/Detail token effective neighbors 和 Top1 mass。Top2 的有效锚点理论上位于 `[1,2]`。
 
-### 6.2 AnchorChartEncoder
+Query-specific context attention 与 Attentive Neural Processes 的“每个 query 选择相关 context”原则一致。[Attentive Neural Processes](https://arxiv.org/abs/1901.05761)
 
-锚点端输入：
+## 8. 全分辨率神经算子
 
-- 真实 PAS/PDP 压缩表示；
-- AE Spectrum latent 的统计 token；
-- 71 维几何特征；
-- BS id、坐标和 log-power。
-
-输出 64 维归一化 chart embedding。训练使用同一基站内的信道相似度构造软标签：PAS/PDP 相似且空间相邻的样本为正对，传播结构差异明显的近距离样本作为 hard negative。
-
-### 6.3 QueryChartPredictor
-
-测试点没有真实信道，因此查询端只使用：
-
-- 坐标和 BS id；
-- 71 维 RF Gaussian 几何特征；
-- 学习型点云局部/走廊 token；
-- Scheme E OOF PAS/PDP 均值及不确定度。
-
-输出预测 chart embedding。训练时只能使用 OOF 频谱先验，禁止给训练样本输入由包含自身真值拟合出的 GP 结果。
-
-### 6.4 候选与锚点数
-
-1. 同基站先取最多 64 个空间可达候选；
-2. chart 相似度和可学习几何门控共同粗排；
-3. 保留 Top8；
-4. token 级融合时每个 token 只保留 Top2。
-
-Top8 是锚点池，不代表每个输出位置平均 8 个。预期每个 token 的有效锚点约 1.5--3，避免 Scheme D 的 42 邻居过平滑。
-
-## 7. 模块 B：学习型环境编码
-
-保留 Scheme E 已实现的 10,070 个 RF Gaussian 和 71 维统计，同时增加轻量图算子：
-
-- UE 周围按尺度采样 128 个 Gaussian token；
-- BS--UE 走廊采样 64 个 Gaussian token；
-- token 包含中心相对坐标、法向、切向尺度、厚度、面积和 corridor 位置；
-- 2 层 PointTransformer/GNO 生成 query-local 环境表示。
-
-它只从点云和数据中学习遮挡/表面关系，不发射射线、不枚举反射路径，符合“不使用传统射线追踪”的约束。
-
-71 维特征作为稳定旁路保留，避免 4000 条样本不足以从零训练大型点云网络。
-
-## 8. 模块 C：分区域 latent 搬运
-
-### 8.1 低秩位移场
-
-对每个锚点，模型根据 `target-anchor` 相对坐标、两端环境差异和频谱先验，预测低分辨率控制网格，再上采样为 latent 位移场。
-
-- Spectrum 使用较平滑的位移场；
-- Detail 使用更高分辨率但有 TV 平滑约束的位移场；
-- 位移按 angle-height、angle-width、delay 三轴分别有界；
-- 不惩罚合理的非零位移，只惩罚饱和和不连续。
-
-与 Scheme D 的区别是：一个锚点内不同 angle-delay 区域可以向不同方向移动。
-
-### 8.2 复相位场
-
-Detail latent 不只需要移动，还需要相位旋转。模型预测两个通道并归一化为单位复数：
+latent 形状始终为：
 
 ```text
-phasor = (a + j*b) / sqrt(a^2 + b^2 + eps)
-aligned_detail = grid_sample(detail) * phasor
+Spectrum [64,2,4,12] = 6,144
+Detail   [32,4,8,24] = 24,576
+总计                    30,720
 ```
 
-相位场采用角度轴、时延轴和低秩交互项的可分结构，避免直接生成 24,576 个互不相关的相位值。它是从训练数据学习的复数变换，不是手工射线公式。
+每个分支包含：
 
-### 8.3 逐锚点监督
+- depthwise 3D residual blocks，修正局部峰；
+- truncated Fourier operator blocks，混合低频全局结构；
+- axial attention，建模 delay 与 angle 方向关系；
+- station FiLM；
+- 零初始化、有界 residual head。
 
-Scheme D 只重点监督融合后的 base，Warp 可以被其他邻居和 residual 掩盖。Scheme F 增加：
+代码级 architecture check 会扫描所有 `Linear`，若任一层输入或输出达到 30,720 就失败。当前实现 Context 参数约 `19.19M`，固定 AE 参数 `8.53M`。
 
-- 每个锚点搬运后的 latent 重建损失；
-- Top2 中最佳锚点的 best-of-K 损失；
-- 位移场平滑和饱和损失；
-- 相位单位模约束；
-- 关闭搬运的消融对照。
+Fourier mixing 采用神经算子在频域参数化全局核的原则，但仅作为 latent 网格修正模块，不声称在求解物理 PDE。[Fourier Neural Operator](https://arxiv.org/abs/2010.08895)
 
-只有当搬运后的单锚点结果显著优于未搬运锚点，才认为 Transport 真正有效。
+## 9. 独立 PowerCNP
 
-## 9. 模块 D：逐 token 稀疏融合
+PowerCNP 只接收 Top8 pair features、观测标准化 log-power、outage 和 query feature。它有自己的 attention，不复用 latent Router 权重。
 
-对每个 Spectrum/Detail token，单独计算 8 个锚点的可靠度：
+输出：
 
-- 对齐后的 token 内容；
-- anchor 与 query 的 chart 相似度；
-- 相对几何和距离；
-- anchor outage/power；
-- 锚点之间的局部方差；
-- GP 频谱不确定度。
+- `q50`：最终标准化 log-power；
+- `q10/q90`：有序不确定区间；
+- `power_base` 与 effective neighbors。
 
-只保留该 token 的 Top2 logits 再 softmax。这样某个邻居可以贡献主径区域，另一个邻居贡献反射径区域，不会把所有邻居的整个 latent 一起平均。
+保护措施：
 
-Router 诊断不再追求 entropy 越高越好，而要求：
+- BS0/BS1 独立输出头；
+- q50 只允许在 attention base 上做有界 residual；
+- 最终标准化值 clamp 到配置范围，默认 `[-4.5,4.5]`；
+- Smooth-L1 + q10/q90 pinball loss；
+- 验证报告输出 log10 power MAE、P90、P99；
+- 双基站 breakdown 若任一 NMSE 非有限或大于 10，流水线失败。
 
-- 全局候选 Top8；
-- token 有效锚点中位数在 `1.5--3.0`；
-- Top1 mass 中位数在 `0.55--0.90`；
-- 不同 token 的首选锚点具有足够差异；
-- BS0/BS1 分开报告。
+该约束用于防止未见过的数量级，不是旧方案的人工距离权重或幅度校准。
 
-## 10. 模块 E：全分辨率混合神经算子
+## 10. PAS/PDP 与 outage 推理策略
 
-融合后的两个 latent 保持原形状：
+### 10.1 单位能量 soft spectral prior
 
-- Spectrum `[64,2,4,12]`，6144 个值；
-- Detail `[32,4,8,24]`，24576 个值。
+解码后可执行一次温和 PAS/PDP projection，scale 限制默认 `[0.75,1.35]`。projection 与原信道按 alpha 混合，最后严格恢复 projection 前逐样本总功率。
 
-每个分支使用 4--6 个混合块：
+Fold0 自动扫描 `alpha = 0/0.15/0.30`，只有官方 Score 更好才用于 final。
+
+### 10.2 soft + hard outage
+
+outage probability 先按：
 
 ```text
-Depthwise 3D Conv（局部修正）
-+ truncated Fourier mixing（跨角度/时延全局关联）
-+ query/environment FiLM
-+ residual gate
+amplitude_scale = sqrt(1 - soft_strength * p_outage)
 ```
 
-Fourier mixing 只在 latent 网格轴上工作，不压平 30,720 维，也不存在大尺寸全连接层。Spectrum/Detail 在中间通过低带宽 cross-gate 交换不确定度和包络信息，但 Detail 不被压成 Spectrum。
+做软衰减，再对超过 threshold 的样本输出精确零。Fold0 自动扫描：
 
-最终 residual 输出零初始化并有界。训练开始时答案等于对齐锚点融合，算子只学习修正误差。
+- soft strength：`0/0.5/0.75/1.0`；
+- hard threshold：`0.2 ... 0.999`。
 
-## 11. 模块 F：不确定度门控频谱先验
+最终策略完全由 Fold0 选择，不查看测试输出后人工挑选。
 
-Scheme E 的 PAS/PDP GP 保留，但用途改为先验：
+## 11. 训练损失
 
-1. 频谱教师输出 PAS/PDP 均值和 OOF 不确定度；
-2. 神经算子自己输出一份 PAS/PDP；
-3. 门控网络按 BS、距离、环境和不确定度预测融合比例；
-4. 只在单位能量信道形状上施加软 envelope correction；
-5. 每次 correction 后重新归一化为单位能量；
-6. 总功率只在最后由 PowerCNP 乘回。
+非 outage 样本：
 
-不再执行会改变绝对能量的 8 轮交替投影。候选为 `no prior / soft prior`，由 OOF 官方分数选择。
+- 官方 Score 可微代理；
+- Spectrum MSE；
+- Detail Smooth-L1 与 cosine correlation；
+- Spectrum/Detail transport base loss；
+- joint angle-delay power loss；
+- Power Smooth-L1 与 quantile pinball；
+- chart cosine distillation；
+- residual 与 warp saturation 正则。
 
-## 12. 模块 G：独立 PowerCNP
+所有样本：
 
-### 12.1 解耦原则
+- outage BCE；
+- Router effective-neighbor 下限；
+- token Top2 防过早退化为 Top1 的轻量正则。
 
-模型先生成单位能量的复数形状，再单独预测 `log10(power)`。PAS/PDP 调整不得改变总功率，功率分支也不改变角度/时延分布。
+## 12. 自动实验和模型选择
 
-### 12.2 输入和输出
+1. 只读扫描 Scheme D：加载温度、Top64/Top16/Top8、no-warp 反事实；
+2. 只读扫描 Scheme E：baseline、oracle outage、oracle power、两者、oracle-free bounded GP power；
+3. 把明确诊断信号转换成有限配置改动；
+4. GPU 冒烟；
+5. Fold0 attempt 1；
+6. 若 Score `<0.66`，允许唯一一次 attempt 2；
+7. 自动选 Score 更高者；
+8. 分别计算 BS0、BS1 指标；
+9. 即使 Score `<0.63`，只要数值有限且单基站 NMSE `<=10`，仍按用户边界完成 full-data final，但报告标记不建议提交。
 
-PowerCNP 输入：
+## 13. 风险与判断标准
 
-- query 坐标和环境编码；
-- Top8 锚点的标准化 log-power 与 pair features；
-- GP power 均值和不确定度，仅作为特征；
-- BS 专属 embedding。
+已通过的是代码可运行性，不是竞赛精度。主要未知风险：
 
-通过 query-to-context cross-attention 输出：
+- 4000 条样本是否足够让 query chart 准确检索传播类型；
+- Detail latent 在空间上的可预测性是否足以把 NMSE 降到 `0.6`；
+- Top2 与 regional warp 是否能明显超过 D 的全局平均；
+- Fold0 是否代表 leaderboard 测试洞。
 
-- 中位数 `q50`；
-- 下/上分位数 `q10/q90`；
-- 一个校准方差。
+目标组合示例：
 
-BS0/BS1 使用独立输出头和独立标准化统计。
+```text
+PAS=0.65, PDP=0.80, NMSE=0.60
+Score=0.4*0.65 + 0.4*0.80 + 0.2/(1+0.60) = 0.705
+```
 
-### 12.3 防爆机制
-
-- Huber + pinball quantile + Gaussian NLL 联合训练；
-- 按真实信道能量分桶采样，避免低能量样本数量占优；
-- 输出限制在该基站 OOF 真值的稳健范围；
-- 预测若落在 `q10/q90` 外，由可微 barrier 惩罚；
-- 报告 P50/P90/P99 绝对误差和最大能量倍率；
-- 任一基站 NMSE 大于 `3` 立即判定实验失败，禁止生成 final。
-
-这里的范围约束是防止神经网络产生未见过的数量级，不是旧方案的人工邻居距离加权或幅度校准。
-
-## 13. 模块 H：保守 outage
-
-outage 分类沿用 SVC/XGBoost/LightGBM 或等价神经集成，但采用三层门槛：
-
-1. 5 折 OOF 官方 Score 选择阈值；
-2. OOF precision 的保守下界必须达到 `0.85`；
-3. 至少 4/5 折模型一致判为 outage 才输出精确零。
-
-若门槛不满足，final 默认不输出精确零信道。验证报告同时给出“零输出关闭”和“零输出开启”两套分数，防止高 accuracy 掩盖误杀。
-
-## 14. 损失函数
-
-总损失由以下部分构成，权重以一次小规模梯度量级校准后固定：
-
-- 官方分数可微代理：PAS、PDP 和 `NMSE/(1+NMSE)`；
-- Spectrum latent Smooth-L1；
-- Detail complex Smooth-L1、相关性和单位复相位损失；
-- 单锚点 transport best-of-K；
-- token 融合后的 base latent 监督；
-- chart contrastive/distillation；
-- PowerCNP Huber、quantile、NLL；
-- outage focal/BCE；
-- 位移平滑、位移饱和、相位单位模；
-- residual 小幅正则和 token gate 稀疏正则。
-
-采样与 loss 都按 BS 和最近支持距离分层，防止 BS0 或近距离样本主导训练。
-
-## 15. 训练策略
-
-这是一套完整模型，但一次 AutoDL 任务会自动执行内部训练阶段，不需要用户中途选择：
-
-1. 复用固定 AE `0.9491` checkpoint，编码全部 latent；
-2. 生成 5 折 OOF 频谱先验、功率先验和 chart 目标；
-3. 预训练 chart retrieval 与 PowerCNP；
-4. 训练 Transport + token fusion；
-5. 解冻神经算子进行官方分数端到端训练；
-6. 自动做关键消融并选择配置；
-7. 三折通过门槛后，用 4000 条全量训练 final；
-8. 生成 500 条测试 NPY、报告、权重归档、SHA256；
-9. 全部校验通过后自动关机。
-
-最大 epoch 设为较大值，例如 `1500--2000`，真正停止由验证分数早停和最大时长共同决定，不再把经验 epoch 当作充分收敛的证明。
-
-## 16. 与研究工作的关系
-
-本方案不是直接照搬论文，而是把可验证的结构原则用于当前赛题：
-
-- [Attentive Neural Processes](https://arxiv.org/abs/1901.05761)：每个查询位置应选择与自身相关的上下文点，支持 query-specific attention，而不是对上下文做固定平均。
-- [GNOT](https://arxiv.org/abs/2302.14376)：对不规则输入使用异构注意力，并用几何门控进行软区域划分；对应 Scheme F 的同基站候选和传播区域专家。
-- [GINO](https://arxiv.org/abs/2309.00583)：用图算子处理不规则几何，再映射到规则 latent 网格；对应点云 Gaussian token 到 Spectrum/Detail 网格的环境条件。
-- [Channel Charting-Based Channel Prediction](https://arxiv.org/abs/2410.11486)：利用 CSI 的空间关系建立无线 latent chart；对应 Scheme F 的 chart 检索，但这里不把 chart 当最终信道瓶颈。
-- [Spatial CSI Prediction with Generative AI](https://arxiv.org/abs/2401.08023)：空间 CSI 应关注路径的角度、时延、衰减和相位；对应分区域位移、复相位场和独立功率建模。
-
-## 17. 参数规模与显存预算
-
-初始设计范围：
-
-- 固定 AE：8.53M；
-- chart + point/GNO encoder：5--8M；
-- transport + token router：12--18M；
-- Spectrum/Detail neural operator：18--28M；
-- Power/outage heads：2--4M；
-- 总 Context：约 40--58M。
-
-5090 采用 AMP、batch size 1--2、Top8 anchors、gradient checkpointing 和 latent GPU cache。目标峰值显存 `<= 28 GiB`，超过时先减小 operator width，不减少 30,720 latent 分辨率。
-
-## 18. 风险与成功判断
-
-### 已测事实
-
-- AE ceiling 足够高；
-- 粗 PAS/PDP 可以被部分预测；
-- 全局多邻居平均无效；
-- BS1 功率会产生灾难性爆点。
-
-### 合理推断
-
-- 无线图谱检索有机会排除几何近但传播类型不同的邻居；
-- per-token Top2 比全局 42 邻居平均更适合保留多径峰；
-- 单位能量频谱约束和独立功率头应消除 Scheme E 的 NMSE 爆炸。
-
-### 尚未验证
-
-- 低秩相位场能否把 NMSE 从约 1.07 降到 0.60；
-- 4000 条数据是否足以稳定训练 40--58M Context；
-- Fold0 的提升能否迁移到榜单测试区域。
-
-因此 `0.70` 属于有针对性的高目标，而不是高概率保证。只有在三个空间折都超过 `0.65`、均值接近 `0.68` 且最差基站无爆点后，才值得把 final 结果作为主提交候选。
+`0.70` 只有在正式 Fold0 和后续多折结果支持时才成立。任何输出 shape 检查通过都不能当作准确率通过。
