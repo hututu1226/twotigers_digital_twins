@@ -56,6 +56,15 @@ class TransportResidualAutomationTests(unittest.TestCase):
         self.assertIs(evaluation_metrics(metrics), metrics)
         self.assertEqual(evaluation_metrics({"metrics": metrics}), metrics)
 
+    def test_unattended_success_without_shutdown_returns_zero(self) -> None:
+        script = (PROJECT_DIR / "scripts" / "run_unattended.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('if [[ "$SHUTDOWN_ON_SUCCESS" == "1" ]]', script)
+        self.assertNotIn(
+            '[[ "$SHUTDOWN_ON_SUCCESS" == 1 ]] && shutdown_instance', script
+        )
+
     def test_router_uniform_floor_prevents_top1_collapse(self) -> None:
         router = ObservationRouter(
             context_channels=4,

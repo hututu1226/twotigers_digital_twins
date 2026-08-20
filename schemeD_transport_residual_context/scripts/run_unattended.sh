@@ -29,4 +29,6 @@ bash scripts/run_all_5090.sh 2>&1 | tee "$MASTER_LOG"
 backup
 status SUCCESS "weights, report, test NPY and archive were backed up"
 trap - ERR INT TERM
-[[ "$SHUTDOWN_ON_SUCCESS" == 1 ]] && shutdown_instance
+if [[ "$SHUTDOWN_ON_SUCCESS" == "1" ]]; then
+  shutdown_instance
+fi
