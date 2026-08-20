@@ -10,6 +10,8 @@ import subprocess
 import _bootstrap  # noqa: F401
 import torch
 
+from scheme_d.reporting import evaluation_metrics
+
 
 def _read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {"status": "MISSING"}
@@ -31,7 +33,8 @@ def main() -> None:
     root = _bootstrap.PROJECT_ROOT
     generated = root / "reports" / "generated"
     generated.mkdir(parents=True, exist_ok=True)
-    evaluation = _read(root / "artifacts" / "fold0" / "context" / "evaluation.json")
+    evaluation_report = _read(root / "artifacts" / "fold0" / "context" / "evaluation.json")
+    evaluation = evaluation_metrics(evaluation_report)
     fold_summary = _read(root / "artifacts" / "fold0" / "context" / "summary.json")
     final_summary = _read(root / "artifacts" / "final" / "context" / "summary.json")
     inference = _read(root / "outputs" / "final" / "Round2_Test_Channel.json")

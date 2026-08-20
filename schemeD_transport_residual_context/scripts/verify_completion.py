@@ -9,6 +9,7 @@ import _bootstrap  # noqa: F401
 import numpy as np
 
 from scheme_d.config import load_config
+from scheme_d.reporting import evaluation_metrics
 
 
 def _require(path: Path, minimum: int = 1) -> None:
@@ -47,7 +48,8 @@ def main() -> None:
             "checkpoint": str(context_dir / checkpoint_name),
         }
         if args.stage == "fold0":
-            evaluation = _read(context_dir / "evaluation.json")
+            evaluation_report = _read(context_dir / "evaluation.json")
+            evaluation = evaluation_metrics(evaluation_report)
             for name in ("pas", "pdp", "nmse", "score"):
                 if not math.isfinite(float(evaluation[name])):
                     raise ValueError(f"non-finite validation {name}")

@@ -19,6 +19,7 @@ from scheme_d.context_model import (  # noqa: E402
     GeometryWarpedLatentField,
     ObservationRouter,
 )
+from scheme_d.reporting import evaluation_metrics  # noqa: E402
 
 
 class ContextMaskBootstrapTests(unittest.TestCase):
@@ -50,6 +51,11 @@ class ContextMaskBootstrapTests(unittest.TestCase):
 
 
 class TransportResidualAutomationTests(unittest.TestCase):
+    def test_nested_and_flat_evaluation_reports_are_supported(self) -> None:
+        metrics = {"pas": 0.5, "pdp": 0.7, "nmse": 1.1, "score": 0.59}
+        self.assertIs(evaluation_metrics(metrics), metrics)
+        self.assertEqual(evaluation_metrics({"metrics": metrics}), metrics)
+
     def test_router_uniform_floor_prevents_top1_collapse(self) -> None:
         router = ObservationRouter(
             context_channels=4,
