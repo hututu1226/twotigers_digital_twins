@@ -36,8 +36,8 @@ trap on_error ERR INT TERM
 status RUNNING "Scheme F formal pipeline is running"
 set -o pipefail
 bash scripts/run_all_5090.sh 2>&1 | tee "$MASTER_LOG"
-backup
 status SUCCESS "weights, report, test NPY and archive were backed up"
+backup
 trap - ERR INT TERM
 if [[ "$SHUTDOWN_ON_SUCCESS" == "1" ]]; then
   shutdown_instance
