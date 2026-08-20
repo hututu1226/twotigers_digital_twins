@@ -56,6 +56,20 @@ def _balanced_limit(indices: np.ndarray, metadata: dict[str, np.ndarray], limit:
     return np.asarray(sorted(selected), dtype=np.int64)
 
 
+def _validation_mask(
+    metadata: dict[str, np.ndarray],
+    available_count: int,
+    validation_fold: object,
+    final: bool,
+) -> np.ndarray:
+    if final:
+        return np.zeros(available_count, dtype=bool)
+    if validation_fold is None:
+        raise ValueError("validation_fold cannot be null during Fold training")
+    fold = int(validation_fold)
+    return metadata["validation_masks"][fold, :available_count].astype(bool)
+
+
 def _build_model(
     config: dict,
     device: torch.device,
@@ -190,8 +204,12 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
     available_count = min(len(channels), len(priors["available"]))
     available = priors["available"][:available_count].astype(bool)
     nonzero = ~metadata["outage"][:available_count].astype(bool)
-    fold = int(config["split"].get("validation_fold", 0))
-    validation_mask = metadata["validation_masks"][fold, :available_count].astype(bool)
+    validation_mask = _validation_mask(
+        metadata,
+        available_count,
+        config["split"].get("validation_fold", 0),
+        final,
+    )
     all_indices = np.arange(available_count, dtype=np.int64)
     if final:
         training_indices = all_indices[available & nonzero]

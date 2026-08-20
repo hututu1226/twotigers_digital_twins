@@ -18,7 +18,7 @@ from scheme_e.reference import build_reference_candidates
 from scheme_e.rf_geometry import build_rf_gaussians, extract_geometry_features, feature_names
 from scheme_e.spectral_targets import channel_spectral_targets, decode_pas_log, decode_pdp_log
 from scheme_e.splits import spatial_block_folds
-from scheme_e.hybrid_training import _build_model
+from scheme_e.hybrid_training import _build_model, _validation_mask
 
 
 def _shape() -> ChannelShape:
@@ -157,6 +157,17 @@ class SchemeECoreTests(unittest.TestCase):
 
         signature = inspect.signature(_build_model)
         self.assertIn("section_override", signature.parameters)
+
+    def test_final_training_accepts_null_validation_fold(self) -> None:
+        metadata = {
+            "validation_masks": np.asarray([[True, False, True]], dtype=bool),
+        }
+        np.testing.assert_array_equal(
+            _validation_mask(metadata, 3, validation_fold=None, final=True),
+            np.zeros(3, dtype=bool),
+        )
+        with self.assertRaisesRegex(ValueError, "cannot be null"):
+            _validation_mask(metadata, 3, validation_fold=None, final=False)
 
     def test_formal_pipeline_preprocesses_before_architecture_inspection(self) -> None:
         project = Path(__file__).resolve().parents[1]
