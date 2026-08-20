@@ -6,6 +6,7 @@ artifacts/
 checkpoints/
 outputs/
 downloads/
+autodl_results/
 logs/
 reports/
 configs/*_submit.json
