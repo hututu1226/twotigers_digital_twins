@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "huawei-scheme-g-multiscale-spectral-context"
+version = "0.1.0"
+description = "Multi-scale spectral context with local full-resolution latent transport"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26,<3",
+  "torch>=2.2",
+  "scipy>=1.11,<2",
+  "scikit-learn>=1.4,<2",
+  "xgboost>=2.0,<4",
+  "lightgbm>=4.3,<5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scheme_g*"]
