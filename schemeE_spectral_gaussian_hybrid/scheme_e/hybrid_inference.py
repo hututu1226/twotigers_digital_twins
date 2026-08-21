@@ -6,11 +6,13 @@ import time
 import numpy as np
 import torch
 
+from .carrier_transport import CarrierFit, select_transport_candidates
 from .config import choose_device, save_json
 from .hybrid_training import (
     _normalized_geometry,
     _prior_batch,
     _reference_context_batch,
+    _transport_batch,
     load_hybrid_checkpoint,
 )
 from .power_safety import apply_outage_policy
@@ -43,13 +45,23 @@ def generate_test_channels(config: dict) -> dict[str, object]:
     )
     if isinstance(reference_strategy, str):
         reference_strategy = {"name": reference_strategy, "top_k": 1}
+    transport_config = section.get("transport_seed", config["hybrid"].get("transport_seed", {}))
+    carrier_payload = checkpoint.get("carrier_fit")
+    carrier_fit = None
+    if carrier_payload is not None:
+        carrier_fit = CarrierFit(
+            np.asarray(carrier_payload["wave_numbers"], dtype=np.float64),
+            np.asarray(carrier_payload["qualities"], dtype=np.float64),
+            np.asarray(carrier_payload["pair_counts"], dtype=np.int64),
+        )
+    transport_count = int(transport_config.get("count", 8)) if carrier_fit else 1
     candidates, distances = build_reference_candidates(
         metadata["test_positions"][test_indices],
         metadata["test_cells"][test_indices],
         metadata["train_positions"],
         metadata["train_cells"],
         metadata["outage"],
-        top_k=max(1, int(reference_strategy.get("top_k", 1))),
+        top_k=max(1, transport_count, int(reference_strategy.get("top_k", 1))),
     )
     geometry_mean = np.asarray(checkpoint["geometry_mean"], dtype=np.float32)
     geometry_std = np.asarray(checkpoint["geometry_std"], dtype=np.float32)
@@ -75,6 +87,12 @@ def generate_test_channels(config: dict) -> dict[str, object]:
             spectral_targets["pas_log"].astype(np.float32),
             spectral_targets["pdp_log"].astype(np.float32),
             reference_strategy,
+        )
+    transport_indices = None
+    transport_distances = None
+    if carrier_fit is not None:
+        transport_indices, transport_distances = select_transport_candidates(
+            candidates, distances, transport_count
         )
     output_path = Path(section["output_path"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,8 +146,25 @@ def generate_test_channels(config: dict) -> dict[str, object]:
             cells_key="test_cells",
             geometry_key="test_geometry_features",
         )
+        transport_channel = None
+        if carrier_fit is not None:
+            if transport_indices is None or transport_distances is None:
+                raise AssertionError("transport inference candidates are missing")
+            transport_channel, transport_context = _transport_batch(
+                channels,
+                metadata,
+                indices,
+                transport_indices[start:stop],
+                transport_distances[start:stop],
+                carrier_fit,
+                device,
+                target_is_test=True,
+                distance_power=float(transport_config.get("distance_power", 2.0)),
+            )
+            inputs["transport_context"] = transport_context
         result = model(
             reference,
+            transport_channel=transport_channel,
             projection_iterations=projection_iterations,
             **inputs,
         )["channel"]
@@ -176,6 +211,7 @@ def generate_test_channels(config: dict) -> dict[str, object]:
             "median": float(np.median(distances[:, 0])),
             "maximum": float(np.max(distances[:, 0])),
         },
+        "carrier_fit": None if carrier_fit is None else carrier_fit.to_dict(),
         "elapsed_seconds": time.perf_counter() - started,
     }
     save_json(section["report_path"], report)

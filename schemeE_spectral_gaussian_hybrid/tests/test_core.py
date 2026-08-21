@@ -6,6 +6,11 @@ import unittest
 from pathlib import Path
 
 from scheme_e.angle_delay import ChannelShape
+from scheme_e.carrier_transport import (
+    TRANSPORT_CONTEXT_DIM,
+    build_transport_seed,
+    select_transport_candidates,
+)
 from scheme_e.gp import (
     SharedMultiOutputGP,
     convex_cosine_weights,
@@ -229,6 +234,42 @@ def test_v2_reference_context_and_spectral_selection() -> None:
     np.testing.assert_array_equal(selected, np.asarray([1]))
 
 
+def test_v3_transport_seed_and_context_are_finite() -> None:
+    generator = torch.Generator().manual_seed(17)
+    real = torch.randn(2, 3, 8, 2, 8, generator=generator)
+    imag = torch.randn(2, 3, 8, 2, 8, generator=generator)
+    references = torch.complex(real, imag)
+    seed, context = build_transport_seed(
+        references,
+        torch.tensor([[2.0, 0.0, 0.0], [3.0, 1.0, 0.0]]),
+        torch.tensor(
+            [
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.5, 0.0, 0.0]],
+                [[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [2.0, 1.0, 0.0]],
+            ]
+        ),
+        torch.tensor([0, 1]),
+        torch.tensor([[2.0, 1.0, 0.5], [3.0, 2.0, 1.0]]),
+        torch.tensor([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        torch.tensor([-1.0, -2.0]),
+        torch.tensor([0.8, 0.4]),
+    )
+    assert seed.shape == references[:, 0].shape
+    assert context.shape == (2, TRANSPORT_CONTEXT_DIM)
+    assert torch.isfinite(seed).all()
+    assert torch.isfinite(context).all()
+
+
+def test_v3_transport_selection_respects_guard_distance() -> None:
+    candidates = np.asarray([[4, 5, 6, 7], [8, 9, 10, 11]], dtype=np.int64)
+    distances = np.asarray([[1, 3, 5, 7], [2, 4, 6, 8]], dtype=np.float32)
+    selected, selected_distances = select_transport_candidates(
+        candidates, distances, 2, np.asarray([3.0, 5.0], dtype=np.float32)
+    )
+    np.testing.assert_array_equal(selected, np.asarray([[5, 6], [10, 11]]))
+    assert np.all(selected_distances >= np.asarray([[3.0], [5.0]]))
+
+
 class SchemeECoreTests(unittest.TestCase):
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()
@@ -253,6 +294,12 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_v2_reference_context(self) -> None:
         test_v2_reference_context_and_spectral_selection()
+
+    def test_v3_transport_seed(self) -> None:
+        test_v3_transport_seed_and_context_are_finite()
+
+    def test_v3_transport_selection(self) -> None:
+        test_v3_transport_selection_respects_guard_distance()
 
     def test_final_projection_override_is_declared(self) -> None:
         import inspect
@@ -299,4 +346,30 @@ class SchemeECoreTests(unittest.TestCase):
         self.assertEqual(
             config["inference"]["output_path"],
             "outputs/v2/Round2_Test_Channel.npy",
+        )
+
+    def test_v3_pipeline_is_continuous_and_uses_independent_output(self) -> None:
+        import json
+
+        project = Path(__file__).resolve().parents[1]
+        script = (project / "scripts" / "run_v3_5090.sh").read_text(
+            encoding="utf-8"
+        )
+        ordered = [
+            "prepare_v3_config.py",
+            "build_strict_fold_prior.py",
+            "prepare_v3_attempts.py",
+            "select_v3_attempt.py",
+            "prepare_v3_final_config.py",
+            "scripts/infer.py",
+            "package_v3_results.sh",
+        ]
+        offsets = [script.index(value) for value in ordered]
+        self.assertEqual(offsets, sorted(offsets))
+        config = json.loads((project / "configs" / "v3_5090.json").read_text())
+        self.assertTrue(config["hybrid"]["transport_seed"]["enabled"])
+        self.assertEqual(config["hybrid"]["transport_seed"]["count"], 8)
+        self.assertEqual(
+            config["inference"]["output_path"],
+            "outputs/v3/Round2_Test_Channel.npy",
         )

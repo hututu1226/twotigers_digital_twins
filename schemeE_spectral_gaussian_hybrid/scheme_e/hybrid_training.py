@@ -11,6 +11,13 @@ import torch.nn.functional as functional
 from .angle_delay import channel_to_shape_target
 from .autoencoder import FactorizedResidualAutoencoder
 from .autoencoder_training import load_autoencoder_checkpoint
+from .carrier_transport import (
+    TRANSPORT_CONTEXT_DIM,
+    CarrierFit,
+    build_transport_seed,
+    fit_carrier_transport,
+    select_transport_candidates,
+)
 from .config import (
     autocast_context,
     choose_device,
@@ -110,6 +117,11 @@ def _build_model(
         reference_dim=(
             REFERENCE_CONTEXT_DIM if bool(section.get("reference_aware", False)) else 0
         ),
+        transport_dim=(
+            TRANSPORT_CONTEXT_DIM
+            if bool(section.get("transport_seed", {}).get("enabled", False))
+            else 0
+        ),
         station_count=(2 if bool(section.get("station_embedding", False)) else 0),
         maximum_power_delta=float(section.get("maximum_power_delta", 0.5)),
     ).to(device)
@@ -175,6 +187,85 @@ def _normalized_geometry(
     return np.clip((features[indices] - mean) / std, -8.0, 8.0).astype(np.float32)
 
 
+def _station_positions(metadata: dict[str, np.ndarray]) -> np.ndarray:
+    cells = metadata["train_cells"].astype(np.int64)
+    geometry = metadata["train_geometry_features"]
+    output = []
+    for cell in range(int(cells.max()) + 1):
+        rows = geometry[cells == cell, 3:6]
+        if not len(rows):
+            raise RuntimeError(f"Cell {cell} has no geometry rows")
+        output.append(np.median(rows, axis=0))
+    return np.asarray(output, dtype=np.float32)
+
+
+def _load_or_fit_transport(
+    section: dict,
+    metadata: dict[str, np.ndarray],
+    channels: np.ndarray,
+    observed_indices: np.ndarray,
+    seed: int,
+) -> CarrierFit | None:
+    transport = section.get("transport_seed", {})
+    if not bool(transport.get("enabled", False)):
+        return None
+    fit_path = Path(transport["fit_path"])
+    if fit_path.is_file():
+        payload = json.loads(fit_path.read_text(encoding="utf-8"))
+        return CarrierFit(
+            np.asarray(payload["wave_numbers"], dtype=np.float64),
+            np.asarray(payload["qualities"], dtype=np.float64),
+            np.asarray(payload["pair_counts"], dtype=np.int64),
+        )
+    fit = fit_carrier_transport(
+        metadata["train_positions"],
+        metadata["train_cells"],
+        metadata["outage"],
+        channels,
+        observed_indices,
+        _station_positions(metadata),
+        seed=int(transport.get("fit_seed", seed)) + 811,
+        maximum_targets_per_cell=int(transport.get("fit_targets_per_cell", 256)),
+        neighbors=int(transport.get("fit_neighbors", 4)),
+        prior_wave_number=float(transport.get("prior_wave_number", -140.33)),
+        search_radius=float(transport.get("search_radius", 12.0)),
+    )
+    fit_path.parent.mkdir(parents=True, exist_ok=True)
+    save_json(fit_path, fit.to_dict())
+    return fit
+
+
+def _transport_batch(
+    channels: np.ndarray,
+    metadata: dict[str, np.ndarray],
+    target_indices: np.ndarray,
+    transport_indices: np.ndarray,
+    transport_distances: np.ndarray,
+    carrier_fit: CarrierFit,
+    device: torch.device,
+    *,
+    target_is_test: bool = False,
+    distance_power: float = 2.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    position_key = "test_positions" if target_is_test else "train_positions"
+    cells_key = "test_cells" if target_is_test else "train_cells"
+    references = torch.as_tensor(
+        np.asarray(channels[transport_indices], dtype=np.complex64), device=device
+    )
+    seed, context = build_transport_seed(
+        references,
+        torch.as_tensor(metadata[position_key][target_indices], device=device),
+        torch.as_tensor(metadata["train_positions"][transport_indices], device=device),
+        torch.as_tensor(metadata[cells_key][target_indices], device=device),
+        torch.as_tensor(transport_distances, device=device),
+        torch.as_tensor(_station_positions(metadata), device=device),
+        torch.as_tensor(carrier_fit.wave_numbers, dtype=torch.float32, device=device),
+        torch.as_tensor(carrier_fit.qualities, dtype=torch.float32, device=device),
+        distance_power=float(distance_power),
+    )
+    return seed, context
+
+
 def _reference_context_batch(
     metadata: dict[str, np.ndarray],
     priors: dict[str, np.ndarray],
@@ -227,15 +318,24 @@ def evaluate_hybrid(
     power_bounds: np.ndarray | None = None,
     reference_strategy: dict[str, float | int] | None = None,
     outage_policy: dict[str, object] | None = None,
+    carrier_fit: CarrierFit | None = None,
+    transport_config: dict[str, object] | None = None,
 ) -> dict[str, float | int]:
     observed_outage = metadata["outage"][observed_indices].astype(bool)
+    transport_count = (
+        int((transport_config or {}).get("count", 8)) if carrier_fit is not None else 1
+    )
     candidates, distances = build_reference_candidates(
         metadata["train_positions"][target_indices],
         metadata["train_cells"][target_indices],
         metadata["train_positions"][observed_indices],
         metadata["train_cells"][observed_indices],
         observed_outage,
-        top_k=max(1, int((reference_strategy or {}).get("top_k", 1))),
+        top_k=max(
+            1,
+            transport_count,
+            int((reference_strategy or {}).get("top_k", 1)),
+        ),
         target_global_indices=target_indices,
         observed_global_indices=observed_indices,
     )
@@ -262,6 +362,13 @@ def evaluate_hybrid(
         )
     else:
         references = candidate_globals[:, 0]
+    transport_globals = None
+    transport_distances = None
+    if carrier_fit is not None:
+        transport_local, transport_distances = select_transport_candidates(
+            candidates, distances, transport_count
+        )
+        transport_globals = observed_indices[transport_local]
     target_cells = metadata["train_cells"][target_indices].astype(np.int64)
     threshold_values = np.asarray(
         (outage_policy or {}).get("threshold_by_cell", [outage_threshold]),
@@ -278,6 +385,8 @@ def evaluate_hybrid(
         np.minimum(target_cells, len(strength_values) - 1)
     ]
     accumulator = ChannelMetricAccumulator(shape)
+    gate_sums = np.zeros((2, 2), dtype=np.float64)
+    gate_counts = np.zeros(2, dtype=np.int64)
     model.eval()
     for start in range(0, len(target_indices), int(batch_size)):
         stop = min(start + int(batch_size), len(target_indices))
@@ -307,7 +416,38 @@ def evaluate_hybrid(
             power_bounds=power_bounds,
             reference_context=reference_context,
         )
-        outputs = model(reference, projection_iterations=projection_iterations, **inputs)
+        transport_channel = None
+        if carrier_fit is not None:
+            if transport_globals is None or transport_distances is None:
+                raise AssertionError("transport candidates were not initialized")
+            transport_channel, transport_context = _transport_batch(
+                channels,
+                metadata,
+                indices,
+                transport_globals[start:stop],
+                transport_distances[start:stop],
+                carrier_fit,
+                device,
+                distance_power=float((transport_config or {}).get("distance_power", 2.0)),
+            )
+            inputs["transport_context"] = transport_context
+        outputs = model(
+            reference,
+            transport_channel=transport_channel,
+            projection_iterations=projection_iterations,
+            **inputs,
+        )
+        if outputs["spectrum_transport_gate"] is not None:
+            batch_cells = target_cells[start:stop]
+            spectrum_gate = outputs["spectrum_transport_gate"].mean(
+                dim=(1, 2, 3, 4)
+            )
+            detail_gate = outputs["detail_transport_gate"].mean(dim=(1, 2, 3, 4))
+            for cell in np.unique(batch_cells):
+                selected = torch.as_tensor(batch_cells == cell, device=device)
+                gate_sums[int(cell), 0] += float(spectrum_gate[selected].sum().cpu())
+                gate_sums[int(cell), 1] += float(detail_gate[selected].sum().cpu())
+                gate_counts[int(cell)] += int(np.sum(batch_cells == cell))
         threshold_batch = torch.as_tensor(
             target_thresholds[start:stop], device=device
         )
@@ -338,6 +478,17 @@ def evaluate_hybrid(
             "reference_strategy": str((reference_strategy or {}).get("name", "nearest")),
         }
     )
+    if carrier_fit is not None:
+        result["transport_wave_numbers"] = carrier_fit.wave_numbers.astype(float).tolist()
+        result["transport_fit_qualities"] = carrier_fit.qualities.astype(float).tolist()
+        result["transport_spectrum_gate_by_cell"] = [
+            float(gate_sums[cell, 0] / max(gate_counts[cell], 1))
+            for cell in range(len(gate_counts))
+        ]
+        result["transport_detail_gate_by_cell"] = [
+            float(gate_sums[cell, 1] / max(gate_counts[cell], 1))
+            for cell in range(len(gate_counts))
+        ]
     return result
 
 
@@ -391,6 +542,16 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
         device,
         initial if initial and Path(initial).is_file() else None,
         section_override=section if final else None,
+    )
+    output_dir = Path(section["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    transport_config = section.get("transport_seed", {})
+    carrier_fit = _load_or_fit_transport(
+        section,
+        metadata,
+        channels,
+        observed_indices,
+        int(config["seed"]),
     )
     geometry_mean, geometry_std = _geometry_stats(
         metadata["train_geometry_features"], observed_indices
@@ -481,8 +642,6 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
         raise ValueError(f"Unsupported Scheme E scheduler: {scheduler_name}")
     amp = bool(config["runtime"].get("amp", True)) and device.type == "cuda"
     scaler = make_grad_scaler(device, amp)
-    output_dir = Path(section["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
     history_path = output_dir / "history.jsonl"
     resume = bool(section.get("resume", False))
     if not resume:
@@ -541,6 +700,7 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                 "geometry_std": geometry_std,
                 "outage_threshold": outage_threshold,
                 "power_bounds": power_bounds,
+                "carrier_fit": None if carrier_fit is None else carrier_fit.to_dict(),
                 "config": config,
             },
             output_dir / "last.pt",
@@ -570,6 +730,27 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                     float(section.get("reference_guard_max_meters", 8.0)),
                 )
             reference_indices = observed_indices[selected_references]
+            transport_indices = None
+            selected_transport_distances = None
+            if carrier_fit is not None:
+                batch_candidates = candidates[local]
+                batch_distances = distances[local]
+                selected_mask = batch_candidates == selected_references[:, None]
+                if not np.all(np.any(selected_mask, axis=1)):
+                    raise RuntimeError("Selected reference is missing from its candidate row")
+                selected_ranks = np.argmax(selected_mask, axis=1)
+                minimum_distances = batch_distances[
+                    np.arange(len(batch_distances)), selected_ranks
+                ]
+                transport_local, selected_transport_distances = (
+                    select_transport_candidates(
+                        batch_candidates,
+                        batch_distances,
+                        int(transport_config.get("count", 8)),
+                        minimum_distances,
+                    )
+                )
+                transport_indices = observed_indices[transport_local]
             reference = torch.as_tensor(np.asarray(channels[reference_indices]), device=device)
             target = torch.as_tensor(np.asarray(channels[target_indices]), device=device)
             reference_context = None
@@ -593,9 +774,28 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                 power_bounds=power_bounds,
                 reference_context=reference_context,
             )
+            transport_channel = None
+            if carrier_fit is not None:
+                if transport_indices is None or selected_transport_distances is None:
+                    raise AssertionError("transport training candidates are missing")
+                transport_channel, transport_context = _transport_batch(
+                    channels,
+                    metadata,
+                    target_indices,
+                    transport_indices,
+                    selected_transport_distances,
+                    carrier_fit,
+                    device,
+                    distance_power=float(transport_config.get("distance_power", 2.0)),
+                )
+                inputs["transport_context"] = transport_context
             optimizer.zero_grad(set_to_none=True)
             with autocast_context(device, amp):
-                outputs = model(reference, **inputs)
+                outputs = model(
+                    reference,
+                    transport_channel=transport_channel,
+                    **inputs,
+                )
                 terms = metric_aligned_channel_losses(outputs["channel"], target, shape)
                 target_shape, target_power, _ = channel_to_shape_target(target, shape)
                 with torch.no_grad():
@@ -614,6 +814,19 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                     outputs["spectrum_residual"].float().square().mean()
                     + outputs["detail_residual"].float().square().mean()
                 )
+                if outputs["spectrum_transport_gate"] is not None:
+                    terms["seed_spectrum"] = functional.smooth_l1_loss(
+                        outputs["base_spectrum"].flatten(1).float(),
+                        target_spectrum.float(),
+                    )
+                    terms["seed_detail"] = functional.smooth_l1_loss(
+                        outputs["base_detail"].flatten(1).float(),
+                        target_detail.float(),
+                    )
+                    terms["transport_gate"] = 0.5 * (
+                        outputs["spectrum_transport_gate"].float().mean()
+                        + outputs["detail_transport_gate"].float().mean()
+                    )
                 total = weighted_sum(terms, weights)
             if not torch.isfinite(total):
                 raise FloatingPointError(f"Non-finite Scheme E loss at epoch={epoch}")
@@ -644,6 +857,8 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                 spectral_targets=spectral_targets,
                 power_bounds=power_bounds,
                 reference_strategy={"name": "nearest", "top_k": 1},
+                carrier_fit=carrier_fit,
+                transport_config=transport_config,
             )
             score = float(validation["score"])
             if score > best_score + float(section.get("minimum_delta", 1e-4)):
@@ -659,6 +874,9 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                         "geometry_std": geometry_std,
                         "outage_threshold": outage_threshold,
                         "power_bounds": power_bounds,
+                        "carrier_fit": (
+                            None if carrier_fit is None else carrier_fit.to_dict()
+                        ),
                         "config": config,
                     },
                     output_dir / "best.pt",
@@ -713,6 +931,7 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                 "geometry_std": geometry_std,
                 "outage_threshold": outage_threshold,
                 "power_bounds": power_bounds,
+                "carrier_fit": None if carrier_fit is None else carrier_fit.to_dict(),
                 "config": config,
             },
             output_dir / "best.pt",
@@ -746,6 +965,8 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
                         spectral_targets=spectral_targets,
                         power_bounds=power_bounds,
                         reference_strategy=dict(strategy),
+                        carrier_fit=carrier_fit,
+                        transport_config=transport_config,
                     )
                 )
         selected_projection = max(projection_reports, key=lambda item: float(item["score"]))
@@ -757,6 +978,9 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
     summary = {
         "stage": "hybrid_final" if final else "hybrid_fold0",
         "architecture": (
+            "spectral_gaussian_dual_seed_transport_v3"
+            if carrier_fit is not None
+            else
             "spectral_gaussian_reference_aware_v2"
             if bool(section.get("reference_aware", False))
             else "spectral_gaussian_power_safe_v2"
@@ -775,6 +999,7 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
             selected_projection.get("reference_strategy", "nearest")
         ),
         "power_bounds": None if power_bounds is None else power_bounds.tolist(),
+        "carrier_fit": None if carrier_fit is None else carrier_fit.to_dict(),
         "checkpoint": str(output_dir / "best.pt"),
         "elapsed_seconds": time.perf_counter() - started,
     }

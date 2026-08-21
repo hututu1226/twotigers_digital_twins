@@ -14,3 +14,7 @@ configs/v2_attempt*.json
 configs/v2_fold_best.json
 configs/v2_final_selected.json
 configs/v2_smoke_generated.json
+configs/v3_smoke_generated.json
+configs/v3_attempt*.json
+configs/v3_fold_best.json
+configs/v3_final_selected.json

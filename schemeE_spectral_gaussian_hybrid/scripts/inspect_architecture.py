@@ -27,6 +27,9 @@ def main() -> None:
                 forbidden.append(name)
     report = {
         "architecture": (
+            "spectral_gaussian_dual_seed_transport_v3"
+            if bool(config["hybrid"].get("transport_seed", {}).get("enabled", False))
+            else
             "spectral_gaussian_reference_aware_v2"
             if bool(config["hybrid"].get("reference_aware", False))
             else "spectral_gaussian_full_resolution_adapter_v1"
@@ -42,6 +45,7 @@ def main() -> None:
         "largest_linear_weight_elements": largest_linear,
         "full_latent_linear_layers": forbidden,
         "full_resolution_check": not forbidden,
+        "dual_seed_transport": bool(model.condition_encoder.transport_dim),
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if forbidden:

@@ -45,12 +45,14 @@ class SpectralConditionEncoder(nn.Module):
         geometry_dim: int,
         width: int,
         reference_dim: int = 0,
+        transport_dim: int = 0,
         station_count: int = 0,
     ) -> None:
         super().__init__()
         self.shape = shape
         self.proxy_count = int(proxy_count)
         self.reference_dim = int(reference_dim)
+        self.transport_dim = int(transport_dim)
         self.station_count = int(station_count)
         self.pas = nn.Sequential(
             nn.Conv2d(self.proxy_count + 1, width // 2, 3, padding=1),
@@ -86,10 +88,25 @@ class SpectralConditionEncoder(nn.Module):
             if self.reference_dim
             else None
         )
+        self.transport = (
+            nn.Sequential(
+                nn.Linear(self.transport_dim, width),
+                nn.LayerNorm(width),
+                nn.GELU(),
+                nn.Linear(width, width),
+                nn.GELU(),
+            )
+            if self.transport_dim
+            else None
+        )
         self.station = (
             nn.Embedding(self.station_count, width) if self.station_count else None
         )
-        extra_width = width * int(self.reference is not None) + width * int(self.station is not None)
+        extra_width = width * (
+            int(self.reference is not None)
+            + int(self.transport is not None)
+            + int(self.station is not None)
+        )
         self.output = nn.Sequential(
             nn.Linear(width * 2 + extra_width + shape.n + 3, width * 2),
             nn.LayerNorm(width * 2),
@@ -108,6 +125,7 @@ class SpectralConditionEncoder(nn.Module):
         outage_probability: torch.Tensor,
         geometry: torch.Tensor,
         reference_context: torch.Tensor | None = None,
+        transport_context: torch.Tensor | None = None,
         cell_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         pas = pas_log.reshape(
@@ -123,6 +141,10 @@ class SpectralConditionEncoder(nn.Module):
             if reference_context is None:
                 raise ValueError("reference_context is required by this model")
             parts.append(self.reference(reference_context.float()))
+        if self.transport is not None:
+            if transport_context is None:
+                raise ValueError("transport_context is required by this model")
+            parts.append(self.transport(transport_context.float()))
         if self.station is not None:
             if cell_ids is None:
                 raise ValueError("cell_ids are required by this model")
@@ -137,6 +159,31 @@ class SpectralConditionEncoder(nn.Module):
         )
         values = torch.cat(parts, dim=1)
         return self.output(values)
+
+
+class DualSeedMixer(nn.Module):
+    """Blend two full-resolution latent grids without flattening either grid."""
+
+    def __init__(self, channels: int, condition_width: int) -> None:
+        super().__init__()
+        self.global_gate = nn.Linear(condition_width, channels)
+        self.local_gate = nn.Conv3d(channels * 3, channels, 1)
+        nn.init.zeros_(self.global_gate.weight)
+        nn.init.constant_(self.global_gate.bias, -0.4)
+        nn.init.zeros_(self.local_gate.weight)
+        nn.init.zeros_(self.local_gate.bias)
+
+    def forward(
+        self,
+        primary: torch.Tensor,
+        transport: torch.Tensor,
+        condition: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        difference = transport - primary
+        local = self.local_gate(torch.cat([primary, transport, difference], dim=1))
+        logits = self.global_gate(condition)[:, :, None, None, None]
+        gate = torch.sigmoid(logits + 0.25 * torch.tanh(local))
+        return primary + gate * difference, gate
 
 
 class FullResolutionLatentAdapter(nn.Module):
@@ -184,6 +231,7 @@ class SpectralGaussianHybrid(nn.Module):
         projection_maximum_scale: float = 4.0,
         train_decoder: bool = False,
         reference_dim: int = 0,
+        transport_dim: int = 0,
         station_count: int = 0,
         maximum_power_delta: float = 0.5,
     ) -> None:
@@ -201,7 +249,18 @@ class SpectralGaussianHybrid(nn.Module):
             geometry_dim,
             condition_width,
             reference_dim=reference_dim,
+            transport_dim=transport_dim,
             station_count=station_count,
+        )
+        self.spectrum_seed_mixer = (
+            DualSeedMixer(autoencoder.spectrum_shape.channels, condition_width)
+            if transport_dim
+            else None
+        )
+        self.detail_seed_mixer = (
+            DualSeedMixer(autoencoder.phase_shape.channels, condition_width)
+            if transport_dim
+            else None
         )
         self.spectrum_adapter = FullResolutionLatentAdapter(
             autoencoder.spectrum_shape.channels,
@@ -238,6 +297,8 @@ class SpectralGaussianHybrid(nn.Module):
         geometry: torch.Tensor,
         projection_iterations: int | None = None,
         reference_context: torch.Tensor | None = None,
+        transport_channel: torch.Tensor | None = None,
+        transport_context: torch.Tensor | None = None,
         cell_ids: torch.Tensor | None = None,
         power_lower: torch.Tensor | None = None,
         power_upper: torch.Tensor | None = None,
@@ -255,6 +316,18 @@ class SpectralGaussianHybrid(nn.Module):
                 torch.minimum(safe_power[:, None] + relative_ue, upper[:, None] + 1.5),
                 lower[:, None] - 1.5,
             )
+        condition = self.condition_encoder(
+            pas_log,
+            pdp_log,
+            safe_ue,
+            safe_power,
+            uncertainty,
+            outage_probability,
+            geometry,
+            reference_context,
+            transport_context,
+            cell_ids,
+        )
         projected = alternating_spectral_projection(
             reference_channel,
             pas_log,
@@ -271,17 +344,40 @@ class SpectralGaussianHybrid(nn.Module):
             spectrum, detail = self.autoencoder.encode(projected_shape)
         spectrum_grid = spectrum.reshape(-1, *self.autoencoder.spectrum_shape.tensor_shape)
         detail_grid = detail.reshape(-1, *self.autoencoder.phase_shape.tensor_shape)
-        condition = self.condition_encoder(
-            pas_log,
-            pdp_log,
-            safe_ue,
-            safe_power,
-            uncertainty,
-            outage_probability,
-            geometry,
-            reference_context,
-            cell_ids,
-        )
+        projected_transport = None
+        spectrum_gate = None
+        detail_gate = None
+        if self.spectrum_seed_mixer is not None:
+            if transport_channel is None or transport_context is None:
+                raise ValueError("transport_channel and transport_context are required")
+            projected_transport = alternating_spectral_projection(
+                transport_channel,
+                pas_log,
+                pdp_log,
+                safe_ue,
+                self.shape,
+                iterations,
+                self.proxy_count,
+                self.projection_minimum_scale,
+                self.projection_maximum_scale,
+            )
+            transport_shape, _, _ = channel_to_shape_target(projected_transport, self.shape)
+            with torch.set_grad_enabled(self.training):
+                transport_spectrum, transport_detail = self.autoencoder.encode(transport_shape)
+            transport_spectrum_grid = transport_spectrum.reshape(
+                -1, *self.autoencoder.spectrum_shape.tensor_shape
+            )
+            transport_detail_grid = transport_detail.reshape(
+                -1, *self.autoencoder.phase_shape.tensor_shape
+            )
+            spectrum_grid, spectrum_gate = self.spectrum_seed_mixer(
+                spectrum_grid, transport_spectrum_grid, condition
+            )
+            detail_grid, detail_gate = self.detail_seed_mixer(
+                detail_grid, transport_detail_grid, condition
+            )
+        base_spectrum = spectrum_grid
+        base_detail = detail_grid
         adapted_spectrum, spectrum_residual = self.spectrum_adapter(spectrum_grid, condition)
         adapted_detail, detail_residual = self.detail_adapter(detail_grid, condition)
         decoded = self.autoencoder.decode(adapted_spectrum.flatten(1), adapted_detail.flatten(1))
@@ -298,6 +394,11 @@ class SpectralGaussianHybrid(nn.Module):
         return {
             "channel": channel,
             "projected_channel": projected,
+            "projected_transport_channel": projected_transport,
+            "base_spectrum": base_spectrum,
+            "base_detail": base_detail,
+            "spectrum_transport_gate": spectrum_gate,
+            "detail_transport_gate": detail_gate,
             "spectrum": adapted_spectrum,
             "detail": adapted_detail,
             "spectrum_residual": spectrum_residual,

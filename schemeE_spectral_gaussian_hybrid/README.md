@@ -1,5 +1,17 @@
 # Scheme E: Spectral Gaussian Hybrid
 
+## Scheme E-v3
+
+初赛程序官方分数 `0.62` 后，复赛严格 Fold0 诊断确认“载波相位对齐的 8 邻居复信道种子”相对单一最近点具有正增益。E-v3 将两种种子分别投影、分别送入 0.95 AE，再在完整 30,720 维 latent 网格上按基站和邻居相干度学习门控融合。
+
+- 算法说明：[docs/v3_algorithm_design.md](docs/v3_algorithm_design.md)
+- AutoDL 教程：[docs/v3_autodl_end_to_end.md](docs/v3_autodl_end_to_end.md)
+- 正式配置：`configs/v3_5090.json`
+- 无人值守入口：`scripts/run_v3_unattended.sh`
+- 独立输出：`outputs/v3/Round2_Test_Channel.npy`
+
+E-v1、E-v2 的配置和输出均保留，E-v3 不覆盖它们。
+
 ## Scheme E-v2
 
 E-v1 的官方反馈分数为 `0.59`。当前推荐运行 E-v2：保留频谱 GP 和真实相位初始化，增加严格 Fold0、分基站 OOF 功率标定与安全边界、参考点相对上下文、六核教师、学习率退火以及自动三次实验选择。

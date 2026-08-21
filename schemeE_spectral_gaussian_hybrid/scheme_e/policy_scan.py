@@ -8,11 +8,13 @@ import numpy as np
 import torch
 import torch.nn.functional as functional
 
+from .carrier_transport import CarrierFit, select_transport_candidates
 from .config import choose_device, save_json
 from .hybrid_training import (
     _normalized_geometry,
     _prior_batch,
     _reference_context_batch,
+    _transport_batch,
     load_hybrid_checkpoint,
 )
 from .metrics import pas_spectrum, pdp_spectrum, official_score
@@ -63,13 +65,23 @@ def collect_validation_statistics(
     model, shape, checkpoint = load_hybrid_checkpoint(
         config, checkpoint_path, device
     )
+    carrier_payload = checkpoint.get("carrier_fit")
+    carrier_fit = None
+    if carrier_payload is not None:
+        carrier_fit = CarrierFit(
+            np.asarray(carrier_payload["wave_numbers"], dtype=np.float64),
+            np.asarray(carrier_payload["qualities"], dtype=np.float64),
+            np.asarray(carrier_payload["pair_counts"], dtype=np.int64),
+        )
+    transport_config = config["hybrid"].get("transport_seed", {})
+    transport_count = int(transport_config.get("count", 8)) if carrier_fit else 1
     candidates, distances = build_reference_candidates(
         metadata["train_positions"][validation],
         metadata["train_cells"][validation],
         metadata["train_positions"][observed],
         metadata["train_cells"][observed],
         metadata["outage"][observed],
-        top_k=max(1, int(reference_strategy.get("top_k", 1))),
+        top_k=max(1, transport_count, int(reference_strategy.get("top_k", 1))),
         target_global_indices=validation,
         observed_global_indices=observed,
     )
@@ -99,6 +111,13 @@ def collect_validation_statistics(
             spectral_targets["pdp_log"].astype(np.float32),
             reference_strategy,
         )
+    transport_indices = None
+    transport_distances = None
+    if carrier_fit is not None:
+        transport_local, transport_distances = select_transport_candidates(
+            candidates, distances, transport_count
+        )
+        transport_indices = observed[transport_local]
     power_bounds = checkpoint.get("power_bounds")
     if power_bounds is not None:
         power_bounds = np.asarray(power_bounds, dtype=np.float32)
@@ -144,8 +163,24 @@ def collect_validation_statistics(
             power_bounds=power_bounds,
             reference_context=reference_context,
         )
+        transport_channel = None
+        if carrier_fit is not None:
+            if transport_indices is None or transport_distances is None:
+                raise AssertionError("transport policy candidates are missing")
+            transport_channel, transport_context = _transport_batch(
+                channels,
+                metadata,
+                indices,
+                transport_indices[start:stop],
+                transport_distances[start:stop],
+                carrier_fit,
+                device,
+                distance_power=float(transport_config.get("distance_power", 2.0)),
+            )
+            inputs["transport_context"] = transport_context
         prediction = model(
             reference,
+            transport_channel=transport_channel,
             projection_iterations=int(projection_iterations),
             **inputs,
         )["channel"]

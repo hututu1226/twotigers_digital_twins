@@ -8,6 +8,7 @@ import _bootstrap  # noqa: F401
 import numpy as np
 from scipy.spatial import cKDTree
 
+from scheme_e.carrier_transport import CarrierFit
 from scheme_e.config import choose_device, load_config, save_json
 from scheme_e.hybrid_training import evaluate_hybrid, load_hybrid_checkpoint
 
@@ -41,6 +42,14 @@ def main() -> None:
     )
     channels = np.load(Path(config["data"]["root"]) / "Round2_Train_Channel.npy", mmap_mode="r")
     threshold = float(checkpoint["outage_threshold"])
+    carrier_payload = checkpoint.get("carrier_fit")
+    carrier_fit = None
+    if carrier_payload is not None:
+        carrier_fit = CarrierFit(
+            np.asarray(carrier_payload["wave_numbers"], dtype=np.float64),
+            np.asarray(carrier_payload["qualities"], dtype=np.float64),
+            np.asarray(carrier_payload["pair_counts"], dtype=np.int64),
+        )
 
     def score(indices: np.ndarray) -> dict:
         if not len(indices):
@@ -50,6 +59,8 @@ def main() -> None:
             np.asarray(checkpoint["geometry_mean"]), np.asarray(checkpoint["geometry_std"]),
             device, int(config["hybrid"].get("validation_batch_size", 2)), threshold,
             int(json.loads((Path(config["hybrid"]["output_dir"]) / "summary.json").read_text())["selected_projection_iterations"]),
+            carrier_fit=carrier_fit,
+            transport_config=config["hybrid"].get("transport_seed", {}),
         )
 
     report = {
