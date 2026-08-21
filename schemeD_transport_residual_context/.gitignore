@@ -1,5 +1,9 @@
 artifacts/
-outputs/
+outputs/*
+!outputs/final/
+outputs/final/*
+!outputs/final/Round2_Test_Channel.npy
+!outputs/final/Round2_Test_Channel.json
 logs/
 packages/
 reports/generated/

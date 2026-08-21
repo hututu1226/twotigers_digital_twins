@@ -1,0 +1,11 @@
+{
+  "scheme": "schemeE_spectral_gaussian_hybrid",
+  "source_run": "AutoDL 2026-08-20 full-4000 final run",
+  "shape": [500, 256, 4, 192],
+  "dtype": "complex64",
+  "finite": true,
+  "zero_samples": 19,
+  "sha256": "abf227c2892c51e7d2f48c5fbb306a188719f7b35b7eaf6d70af16da3e7f72e6",
+  "fold0_validation_score": 0.5272,
+  "note": "The validation score is an offline Fold0 hybrid-decoding metric, not an official test score."
+}

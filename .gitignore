@@ -4,7 +4,7 @@ Round2_Map.zip
 artifacts/
 !schemeC_full_resolution_context/artifacts/
 checkpoints/
-outputs/
+/outputs/
 downloads/
 autodl_results/
 logs/

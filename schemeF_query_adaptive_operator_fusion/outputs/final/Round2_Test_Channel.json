@@ -1,0 +1,11 @@
+{
+  "scheme": "schemeF_query_adaptive_operator_fusion",
+  "source_run": "AutoDL 2026-08-21 full-4000 final run",
+  "shape": [500, 256, 4, 192],
+  "dtype": "complex64",
+  "finite": true,
+  "zero_samples": 8,
+  "sha256": "80d3c0e71d97142874bd636b870200fe8e580c548e06bb241dd72e26082baf8c",
+  "fold0_validation_score": 0.5619814342386075,
+  "note": "The validation score is an offline Fold0 metric, not an official test score."
+}

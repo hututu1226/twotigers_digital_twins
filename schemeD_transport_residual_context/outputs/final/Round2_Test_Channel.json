@@ -1,0 +1,11 @@
+{
+  "scheme": "schemeD_transport_residual_context",
+  "source_run": "AutoDL 2026-08-20 full-4000 final run",
+  "shape": [500, 256, 4, 192],
+  "dtype": "complex64",
+  "finite": true,
+  "zero_samples": 0,
+  "sha256": "94c8dd69a7e51d02bc5a4725be6f069d632b8a6b123840835e6f7da257f330da",
+  "fold0_validation_score": 0.5960408,
+  "note": "The validation score is an offline Fold0 metric, not an official test score."
+}
