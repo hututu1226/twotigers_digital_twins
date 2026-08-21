@@ -13,8 +13,20 @@ from scheme_e.gp import (
     convex_mse_weights,
     ensemble_log_power_predictions,
 )
+from scheme_e.power_safety import (
+    apply_outage_policy,
+    apply_power_calibration,
+    clip_power_priors,
+    compute_power_bounds,
+    fit_power_calibration,
+)
 from scheme_e.projection import alternating_spectral_projection
 from scheme_e.reference import build_reference_candidates
+from scheme_e.reference_context import (
+    REFERENCE_CONTEXT_DIM,
+    build_reference_context,
+    select_reference_candidates,
+)
 from scheme_e.rf_geometry import build_rf_gaussians, extract_geometry_features, feature_names
 from scheme_e.spectral_targets import channel_spectral_targets, decode_pas_log, decode_pdp_log
 from scheme_e.splits import spatial_block_folds
@@ -136,6 +148,87 @@ def test_spatial_folds_are_nonempty_and_cell_balanced() -> None:
         assert set(cells[folds == fold].tolist()) == {0, 1}
 
 
+def test_v2_power_safety_is_per_cell_and_bounded() -> None:
+    power = np.asarray([-4.0, -3.0, -2.0, -8.0, -7.0, -6.0], dtype=np.float32)
+    outage = np.zeros(6, dtype=bool)
+    cells = np.asarray([0, 0, 0, 1, 1, 1], dtype=np.int64)
+    bounds = compute_power_bounds(power, outage, cells, np.arange(6), 0.0, 1.0)
+    clipped, ue = clip_power_priors(
+        np.asarray([4.0, -20.0], dtype=np.float32),
+        np.asarray([[4.0, 4.0], [-20.0, -20.0]], dtype=np.float32),
+        np.asarray([0, 1]),
+        bounds,
+    )
+    np.testing.assert_allclose(clipped, np.asarray([-2.0, -8.0]))
+    assert np.isfinite(ue).all()
+    channel = torch.ones(2, 2, 1, 2, dtype=torch.complex64)
+    attenuated = apply_outage_policy(
+        channel,
+        torch.tensor([0.5, 0.99]),
+        torch.tensor([0.9, 0.9]),
+        torch.tensor([2.0, 2.0]),
+    )
+    assert torch.allclose(attenuated[0].abs(), torch.full_like(attenuated[0].abs(), 0.5))
+    assert torch.count_nonzero(attenuated[1]) == 0
+
+
+def test_v2_power_calibration_is_cell_specific_and_shifts_ue() -> None:
+    prediction = np.asarray([-4.0, -3.0, -2.0, -8.0, -7.0, -6.0], dtype=np.float32)
+    target = np.asarray([-5.0, -4.0, -3.0, -6.0, -5.0, -4.0], dtype=np.float32)
+    cells = np.asarray([0, 0, 0, 1, 1, 1], dtype=np.int64)
+    parameters = fit_power_calibration(
+        prediction, target, cells, np.arange(len(cells)), slope_bounds=(0.5, 1.5)
+    )
+    calibrated, ue = apply_power_calibration(
+        prediction,
+        np.column_stack([prediction, prediction]),
+        cells,
+        parameters,
+    )
+    np.testing.assert_allclose(calibrated, target, atol=1e-5)
+    np.testing.assert_allclose(ue[:, 0], target, atol=1e-5)
+
+
+def test_v2_reference_context_and_spectral_selection() -> None:
+    count = 2
+    geometry = np.zeros((count, 71), dtype=np.float32)
+    pas = np.log1p(1000.0 * np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32))
+    pdp = pas.copy()
+    context = build_reference_context(
+        np.asarray([[1, 0, 0], [0, 2, 0]], dtype=np.float32),
+        np.zeros((count, 3), dtype=np.float32),
+        geometry,
+        geometry,
+        pas,
+        pdp,
+        pas,
+        pdp,
+        np.asarray([-3, -4], dtype=np.float32),
+        np.asarray([-3, -4], dtype=np.float32),
+        np.zeros(count, dtype=np.float32),
+    )
+    assert context.shape == (count, REFERENCE_CONTEXT_DIM)
+    selected = select_reference_candidates(
+        np.asarray([[0, 1]], dtype=np.int64),
+        np.asarray([[1.0, 1.1]], dtype=np.float32),
+        geometry[:1],
+        geometry,
+        pas[1:2],
+        pdp[1:2],
+        pas,
+        pdp,
+        {
+            "name": "spectral",
+            "top_k": 2,
+            "distance_weight": 0.1,
+            "pas_weight": 2.0,
+            "pdp_weight": 2.0,
+            "geometry_weight": 0.0,
+        },
+    )
+    np.testing.assert_array_equal(selected, np.asarray([1]))
+
+
 class SchemeECoreTests(unittest.TestCase):
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()
@@ -151,6 +244,15 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_spatial_folds(self) -> None:
         test_spatial_folds_are_nonempty_and_cell_balanced()
+
+    def test_v2_power_safety(self) -> None:
+        test_v2_power_safety_is_per_cell_and_bounded()
+
+    def test_v2_power_calibration(self) -> None:
+        test_v2_power_calibration_is_cell_specific_and_shifts_ue()
+
+    def test_v2_reference_context(self) -> None:
+        test_v2_reference_context_and_spectral_selection()
 
     def test_final_projection_override_is_declared(self) -> None:
         import inspect
@@ -175,4 +277,26 @@ class SchemeECoreTests(unittest.TestCase):
         self.assertLess(
             script.index("python scripts/preprocess.py"),
             script.index("python scripts/inspect_architecture.py"),
+        )
+
+    def test_v2_pipeline_is_continuous_and_preserves_v1_output(self) -> None:
+        import json
+
+        project = Path(__file__).resolve().parents[1]
+        script = (project / "scripts" / "run_v2_5090.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertLess(
+            script.index("build_strict_fold_prior.py"),
+            script.index("prepare_v2_attempts.py"),
+        )
+        self.assertLess(
+            script.index("select_v2_attempt.py"),
+            script.index("prepare_v2_final_config.py"),
+        )
+        self.assertLess(script.index("scripts/infer.py"), script.index("package_v2_results.sh"))
+        config = json.loads((project / "configs" / "v2_5090.json").read_text())
+        self.assertEqual(
+            config["inference"]["output_path"],
+            "outputs/v2/Round2_Test_Channel.npy",
         )

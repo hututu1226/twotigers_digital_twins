@@ -1,0 +1,181 @@
+{
+  "seed": 2026,
+  "data": {
+    "root": "../Round2_Map"
+  },
+  "split": {
+    "validation_fold": 0
+  },
+  "preprocessing": {
+    "artifact_dir": "artifacts/preprocessed_scheme_e",
+    "context_grid_resolution": 3.0,
+    "environment_grid_resolution": 1.0,
+    "grid_margin": 6.0,
+    "fold_count": 5,
+    "validation_tile_meters": 72.0,
+    "validation_hole_meters": 26.0,
+    "sector_half_angle_degrees": 61.0,
+    "maximum_distance": 205.0,
+    "test_component_link_meters": 6.0,
+    "channel_chunk_size": 8,
+    "rf_gaussian_count": 10070,
+    "corridor_samples": 24,
+    "fresnel_radius_meters": 2.0,
+    "spectral_fold_count": 8,
+    "spectral_tile_meters": 24.0
+  },
+  "runtime": {
+    "device": "auto",
+    "amp": true,
+    "workers": 8,
+    "spectral_train_limit": 0,
+    "hybrid_train_limit": 0,
+    "hybrid_validation_limit": 0,
+    "test_limit": 0
+  },
+  "autoencoder": {
+    "architecture": "factorized_residual_v4",
+    "spectrum_stem_channels": 32,
+    "phase_stem_channels": 32,
+    "spectrum_latent_channels": 64,
+    "phase_latent_channels": 32,
+    "residual_blocks": 3,
+    "detail_hidden_channels": 96,
+    "spectrum_decoder_channels": 64,
+    "detail_decoder_channels": 96,
+    "detail_gain": 2.0,
+    "maximum_log_power": 12.0,
+    "envelope_floor": 0.0001,
+    "spectrum_log_scale": 4.0,
+    "output_dir": "artifacts/fold0/autoencoder"
+  },
+  "encoding": {
+    "autoencoder_checkpoint": "../schemeC_full_resolution_context/artifacts/fold0/autoencoder/best.pt",
+    "output_path": "artifacts/shared/encoded.npz"
+  },
+  "spectral": {
+    "target_path": "artifacts/spectral/channel_targets.npz",
+    "proxy_count": 24,
+    "chunk_size": 8,
+    "storage_dtype": "float16"
+  },
+  "spectral_teacher": {
+    "kernels": [
+      "rq6",
+      "rq10",
+      "rq20",
+      "rq40",
+      "matern12",
+      "matern20"
+    ],
+    "kernel_feature_mixes": [0.25, 0.5, 0.5, 0.25, 0.75, 0.0],
+    "pas_latent_dim": 128,
+    "pdp_latent_dim": 64,
+    "gp_noise": 0.01,
+    "feature_length": 1.0,
+    "prediction_batch_size": 128,
+    "weight_grid_step": 0.05,
+    "outage_positive_weight": 4.0,
+    "false_kill_cost": 0.56,
+    "power_calibration": {
+      "enabled": true,
+      "slope_bounds": [0.6, 1.4]
+    },
+    "oof_output_path": "artifacts/v2/fold0/spectral_teacher/strict_priors.npz",
+    "oof_report_path": "artifacts/v2/fold0/spectral_teacher/strict_oof_report.json",
+    "test_output_path": "artifacts/v2/final/spectral_teacher/test_priors.npz",
+    "model_path": "artifacts/v2/final/spectral_teacher/model.pkl",
+    "final_report_path": "artifacts/v2/final/spectral_teacher/final_report.json"
+  },
+  "hybrid": {
+    "autoencoder_checkpoint": "../schemeC_full_resolution_context/artifacts/fold0/autoencoder/best.pt",
+    "condition_width": 192,
+    "spectrum_blocks": 4,
+    "detail_blocks": 6,
+    "maximum_spectrum_residual": 0.75,
+    "maximum_detail_residual": 0.75,
+    "maximum_power_delta": 0.35,
+    "power_bound_quantiles": [0.005, 0.995],
+    "projection_iterations": 4,
+    "projection_candidates": [2, 4],
+    "projection_minimum_scale": 0.25,
+    "projection_maximum_scale": 4.0,
+    "reference_aware": true,
+    "station_embedding": true,
+    "reference_sampling": "test_matched",
+    "reference_strategies": [
+      {"name": "nearest", "top_k": 1},
+      {"name": "spectral_local", "top_k": 4, "distance_weight": 1.0, "pas_weight": 1.5, "pdp_weight": 1.0, "geometry_weight": 0.1},
+      {"name": "spectral_balanced", "top_k": 8, "distance_weight": 1.0, "pas_weight": 1.0, "pdp_weight": 0.7, "geometry_weight": 0.15}
+    ],
+    "train_decoder": false,
+    "decoder_learning_rate_scale": 0.05,
+    "reference_candidates": 64,
+    "reference_guard_min_meters": 3.5,
+    "reference_guard_max_meters": 9.0,
+    "batch_size": 4,
+    "validation_batch_size": 4,
+    "steps_per_epoch": 64,
+    "epochs": 900,
+    "learning_rate": 0.0002,
+    "scheduler": "plateau",
+    "scheduler_factor": 0.5,
+    "scheduler_patience_validations": 8,
+    "minimum_learning_rate": 0.000002,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "validation_interval": 5,
+    "checkpoint_interval": 5,
+    "early_stopping_patience": 100,
+    "minimum_delta": 0.0001,
+    "maximum_training_hours": 2.0,
+    "loss_weights": {
+      "score": 1.0,
+      "spectrum_latent": 0.1,
+      "detail_latent": 0.04,
+      "detail_correlation": 0.08,
+      "power": 0.18,
+      "residual": 0.004
+    },
+    "output_dir": "artifacts/v2/fold0_attempt2/hybrid"
+  },
+  "hybrid_final": {
+    "batch_size": 4,
+    "steps_per_epoch": 80,
+    "epochs": 200,
+    "learning_rate": 0.0001,
+    "scheduler": "cosine",
+    "minimum_learning_rate": 0.000002,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "checkpoint_interval": 10,
+    "reference_candidates": 64,
+    "reference_sampling": "test_matched",
+    "projection_iterations": 4,
+    "train_decoder": false,
+    "decoder_learning_rate_scale": 0.05,
+    "loss_weights": {
+      "score": 1.0,
+      "spectrum_latent": 0.1,
+      "detail_latent": 0.04,
+      "detail_correlation": 0.08,
+      "power": 0.18,
+      "residual": 0.004
+    },
+    "output_dir": "artifacts/v2/final/hybrid"
+  },
+  "policy_scan": {
+    "threshold_candidates": [0.2, 0.3, 0.4, 0.46, 0.55, 0.65, 0.75, 0.85, 0.92, 0.97, 0.99, 0.999],
+    "soft_strength_candidates": [0.0, 0.5, 1.0, 2.0, 4.0]
+  },
+  "inference": {
+    "checkpoint": "artifacts/v2/final/hybrid/best.pt",
+    "output_path": "outputs/v2/Round2_Test_Channel.npy",
+    "report_path": "reports/generated/v2_final_inference.json",
+    "batch_size": 4,
+    "projection_iterations": 4,
+    "reference_strategy": {"name": "nearest", "top_k": 1},
+    "outage_threshold_by_cell": [0.46, 0.46],
+    "soft_outage_strength_by_cell": [0.0, 0.0]
+  }
+}

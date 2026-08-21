@@ -44,10 +44,14 @@ class SpectralConditionEncoder(nn.Module):
         proxy_count: int,
         geometry_dim: int,
         width: int,
+        reference_dim: int = 0,
+        station_count: int = 0,
     ) -> None:
         super().__init__()
         self.shape = shape
         self.proxy_count = int(proxy_count)
+        self.reference_dim = int(reference_dim)
+        self.station_count = int(station_count)
         self.pas = nn.Sequential(
             nn.Conv2d(self.proxy_count + 1, width // 2, 3, padding=1),
             nn.GELU(),
@@ -71,8 +75,23 @@ class SpectralConditionEncoder(nn.Module):
             nn.Linear(width, width),
             nn.GELU(),
         )
+        self.reference = (
+            nn.Sequential(
+                nn.Linear(self.reference_dim, width),
+                nn.LayerNorm(width),
+                nn.GELU(),
+                nn.Linear(width, width),
+                nn.GELU(),
+            )
+            if self.reference_dim
+            else None
+        )
+        self.station = (
+            nn.Embedding(self.station_count, width) if self.station_count else None
+        )
+        extra_width = width * int(self.reference is not None) + width * int(self.station is not None)
         self.output = nn.Sequential(
-            nn.Linear(width * 2 + shape.n + 3, width * 2),
+            nn.Linear(width * 2 + extra_width + shape.n + 3, width * 2),
             nn.LayerNorm(width * 2),
             nn.GELU(),
             nn.Linear(width * 2, width),
@@ -88,23 +107,35 @@ class SpectralConditionEncoder(nn.Module):
         uncertainty: torch.Tensor,
         outage_probability: torch.Tensor,
         geometry: torch.Tensor,
+        reference_context: torch.Tensor | None = None,
+        cell_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         pas = pas_log.reshape(
             -1, self.proxy_count + 1, self.shape.m_v, self.shape.m_h
         )
         pdp = pdp_log.reshape(-1, self.shape.n, self.shape.s)
-        values = torch.cat(
+        parts = [
+            self.pas(pas.float()),
+            self.pdp(pdp.float()),
+            self.geometry(geometry.float()),
+        ]
+        if self.reference is not None:
+            if reference_context is None:
+                raise ValueError("reference_context is required by this model")
+            parts.append(self.reference(reference_context.float()))
+        if self.station is not None:
+            if cell_ids is None:
+                raise ValueError("cell_ids are required by this model")
+            parts.append(self.station(cell_ids.long()))
+        parts.extend(
             [
-                self.pas(pas.float()),
-                self.pdp(pdp.float()),
-                self.geometry(geometry.float()),
                 ue_log_energy.float(),
                 log_power.float()[:, None],
                 uncertainty.float()[:, None],
                 outage_probability.float()[:, None],
-            ],
-            dim=1,
+            ]
         )
+        values = torch.cat(parts, dim=1)
         return self.output(values)
 
 
@@ -152,6 +183,9 @@ class SpectralGaussianHybrid(nn.Module):
         projection_minimum_scale: float = 0.25,
         projection_maximum_scale: float = 4.0,
         train_decoder: bool = False,
+        reference_dim: int = 0,
+        station_count: int = 0,
+        maximum_power_delta: float = 0.5,
     ) -> None:
         super().__init__()
         self.autoencoder = autoencoder
@@ -160,8 +194,14 @@ class SpectralGaussianHybrid(nn.Module):
         self.projection_iterations = int(projection_iterations)
         self.projection_minimum_scale = float(projection_minimum_scale)
         self.projection_maximum_scale = float(projection_maximum_scale)
+        self.maximum_power_delta = float(maximum_power_delta)
         self.condition_encoder = SpectralConditionEncoder(
-            shape, self.proxy_count, geometry_dim, condition_width
+            shape,
+            self.proxy_count,
+            geometry_dim,
+            condition_width,
+            reference_dim=reference_dim,
+            station_count=station_count,
         )
         self.spectrum_adapter = FullResolutionLatentAdapter(
             autoencoder.spectrum_shape.channels,
@@ -197,13 +237,29 @@ class SpectralGaussianHybrid(nn.Module):
         outage_probability: torch.Tensor,
         geometry: torch.Tensor,
         projection_iterations: int | None = None,
+        reference_context: torch.Tensor | None = None,
+        cell_ids: torch.Tensor | None = None,
+        power_lower: torch.Tensor | None = None,
+        power_upper: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         iterations = self.projection_iterations if projection_iterations is None else int(projection_iterations)
+        safe_power = log_power.float()
+        safe_ue = ue_log_energy.float()
+        if power_lower is not None and power_upper is not None:
+            lower = power_lower.float()
+            upper = power_upper.float()
+            original_power = safe_power
+            safe_power = torch.maximum(torch.minimum(safe_power, upper), lower)
+            relative_ue = (safe_ue - original_power[:, None]).clamp(-1.5, 1.5)
+            safe_ue = torch.maximum(
+                torch.minimum(safe_power[:, None] + relative_ue, upper[:, None] + 1.5),
+                lower[:, None] - 1.5,
+            )
         projected = alternating_spectral_projection(
             reference_channel,
             pas_log,
             pdp_log,
-            ue_log_energy,
+            safe_ue,
             self.shape,
             iterations,
             self.proxy_count,
@@ -218,17 +274,26 @@ class SpectralGaussianHybrid(nn.Module):
         condition = self.condition_encoder(
             pas_log,
             pdp_log,
-            ue_log_energy,
-            log_power,
+            safe_ue,
+            safe_power,
             uncertainty,
             outage_probability,
             geometry,
+            reference_context,
+            cell_ids,
         )
         adapted_spectrum, spectrum_residual = self.spectrum_adapter(spectrum_grid, condition)
         adapted_detail, detail_residual = self.detail_adapter(detail_grid, condition)
         decoded = self.autoencoder.decode(adapted_spectrum.flatten(1), adapted_detail.flatten(1))
-        power_delta = 0.5 * torch.tanh(self.power_head(condition).squeeze(1))
-        predicted_power = log_power.float() + power_delta
+        power_delta = self.maximum_power_delta * torch.tanh(
+            self.power_head(condition).squeeze(1)
+        )
+        predicted_power = safe_power + power_delta
+        if power_lower is not None and power_upper is not None:
+            predicted_power = torch.maximum(
+                torch.minimum(predicted_power, power_upper.float()),
+                power_lower.float(),
+            )
         channel = shape_to_channel(decoded, predicted_power, self.shape)
         return {
             "channel": channel,

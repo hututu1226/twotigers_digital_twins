@@ -326,7 +326,8 @@ def _corridor_features(
         )
         scaled_density.append(float(np.mean(profile)))
     sample_axis = np.linspace(0.05, 0.95, len(density))
-    at = lambda fraction: float(density[int(np.argmin(np.abs(sample_axis - fraction)))])
+    def at(fraction: float) -> float:
+        return float(density[int(np.argmin(np.abs(sample_axis - fraction)))])
     return [
         float(np.mean(density)),
         float(np.max(density)),

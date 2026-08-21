@@ -6,7 +6,6 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 import numpy as np
-import torch
 from scipy.spatial import cKDTree
 
 from scheme_e.config import choose_device, load_config, save_json

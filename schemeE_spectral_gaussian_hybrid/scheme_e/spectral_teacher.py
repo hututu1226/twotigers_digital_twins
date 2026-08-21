@@ -7,7 +7,6 @@ from pathlib import Path
 import time
 
 import numpy as np
-import torch
 
 from .config import choose_device, save_json, seed_everything
 from .gp import (
@@ -18,8 +17,19 @@ from .gp import (
     ensemble_predictions,
 )
 from .outage import OutageEnsemble, binary_metrics
+from .power_safety import apply_power_calibration, fit_power_calibration
 from .spectral_compression import SpectralCompressor
 from .spectral_targets import PAS_LOG_SCALE, PDP_LOG_SCALE
+
+
+def _kernel_settings(section: dict) -> list[tuple[str, float]]:
+    names = [str(value) for value in section.get("kernels", ["rq10", "rq20", "matern20"])]
+    mixes = section.get("kernel_feature_mixes")
+    if mixes is None:
+        mixes = [float(section.get("feature_mix", 0.5))] * len(names)
+    if len(mixes) != len(names):
+        raise ValueError("kernel_feature_mixes must match kernels")
+    return [(name, float(mix)) for name, mix in zip(names, mixes, strict=True)]
 
 
 def _load_arrays(config: dict) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
@@ -128,9 +138,10 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
     selected = _balanced_indices(metadata, targets, limit)
     selected_mask = np.zeros(len(targets["outage"]), dtype=np.bool_)
     selected_mask[selected] = True
-    kernels = tuple(section.get("kernels", ["rq10", "rq20", "matern20"]))
-    if not kernels:
+    kernel_settings = _kernel_settings(section)
+    if not kernel_settings:
         raise ValueError("At least one spectral GP kernel is required")
+    kernels = tuple(name for name, _ in kernel_settings)
     pas_width = targets["pas_log"].shape[1]
     pdp_width = targets["pdp_log"].shape[1]
     ue_dim = targets["ue_log_energy"].shape[1]
@@ -148,6 +159,7 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
                 "seed": int(config["seed"]),
                 "selected": hashlib.sha256(selected.tobytes()).hexdigest(),
                 "kernels": kernels,
+                "kernel_feature_mixes": [mix for _, mix in kernel_settings],
                 "pas_latent_dim": int(section.get("pas_latent_dim", 96)),
                 "pdp_latent_dim": int(section.get("pdp_latent_dim", 48)),
                 "gp_noise": float(section.get("gp_noise", 0.01)),
@@ -206,11 +218,12 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
             target_matrix = _target_matrix(
                 targets, spectral_training, pas_compressor, pdp_compressor
             )
-            for kernel_index, kernel_name in enumerate(kernels):
+            for kernel_index, (kernel_name, feature_mix) in enumerate(kernel_settings):
                 model = SharedMultiOutputGP(
                     str(kernel_name),
                     noise=float(section.get("gp_noise", 0.01)),
                     feature_length=float(section.get("feature_length", 1.0)),
+                    feature_mix=float(feature_mix),
                 ).fit(
                     metadata["train_positions"][spectral_training],
                     metadata["train_geometry_features"][spectral_training],
@@ -342,12 +355,65 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
                 "auxiliary_weights": auxiliary_weights.tolist(),
             }
         )
+    raw_power_mae = float(
+        np.mean(
+            np.abs(
+                ensemble_power[valid_nonzero]
+                - targets["log_power"][valid_nonzero]
+            )
+        )
+    )
+    calibration_section = section.get("power_calibration", {})
+    if bool(calibration_section.get("enabled", False)):
+        slope_bounds = tuple(
+            float(value)
+            for value in calibration_section.get("slope_bounds", [0.6, 1.4])
+        )
+        power_calibration = fit_power_calibration(
+            ensemble_power,
+            targets["log_power"],
+            metadata["train_cells"],
+            np.flatnonzero(valid_nonzero),
+            slope_bounds=slope_bounds,
+        )
+        calibrated_power, calibrated_ue = apply_power_calibration(
+            ensemble_power[available],
+            ensemble_ue[available],
+            metadata["train_cells"][available],
+            power_calibration,
+        )
+        ensemble_power[available] = calibrated_power
+        ensemble_ue[available] = calibrated_ue
+    else:
+        power_calibration = np.column_stack(
+            [
+                np.zeros(cell_count, dtype=np.float32),
+                np.zeros(cell_count, dtype=np.float32),
+                np.ones(cell_count, dtype=np.float32),
+            ]
+        )
     outage_calibrator = OutageEnsemble(
         false_kill_cost=float(section.get("false_kill_cost", 0.56))
     )
     threshold = outage_calibrator.calibrate_threshold(
         outage_probability[available], targets["outage"][available]
     )
+    thresholds_by_cell = np.full(cell_count, threshold, dtype=np.float32)
+    for cell in range(cell_count):
+        cell_indices = np.flatnonzero(
+            available & (metadata["train_cells"] == cell)
+        )
+        if len(cell_indices):
+            thresholds_by_cell[cell] = OutageEnsemble(
+                false_kill_cost=float(section.get("false_kill_cost", 0.56))
+            ).calibrate_threshold(
+                outage_probability[cell_indices], targets["outage"][cell_indices]
+            )
+            cell_metrics[cell]["outage"] = binary_metrics(
+                outage_probability[cell_indices],
+                targets["outage"][cell_indices],
+                float(thresholds_by_cell[cell]),
+            )
     output_path = Path(section["oof_output_path"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -363,17 +429,23 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
         pdp_weights=pdp_weights,
         auxiliary_weights=auxiliary_weights_by_cell,
         outage_threshold=np.asarray(threshold, dtype=np.float32),
+        outage_threshold_by_cell=thresholds_by_cell,
+        power_calibration=power_calibration,
     )
     report = {
         "stage": "spectral_teacher_oof",
         "kernels": list(kernels),
+        "kernel_feature_mixes": [mix for _, mix in kernel_settings],
         "selected_samples": int(len(selected)),
         "available_predictions": int(available.sum()),
         "nonzero_predictions": int(valid_nonzero.sum()),
         "pas_accuracy": float(1.0 - _cosine_loss(ensemble_pas[valid_nonzero], targets["pas_log"][valid_nonzero], PAS_LOG_SCALE).mean()),
         "pdp_accuracy": float(1.0 - _cosine_loss(ensemble_pdp[valid_nonzero], targets["pdp_log"][valid_nonzero], PDP_LOG_SCALE).mean()),
         "power_mae_log10": float(np.mean(np.abs(ensemble_power[valid_nonzero] - targets["log_power"][valid_nonzero]))),
+        "raw_power_mae_log10": raw_power_mae,
         "outage": binary_metrics(outage_probability[available], targets["outage"][available], threshold),
+        "outage_threshold_by_cell": thresholds_by_cell.tolist(),
+        "power_calibration": power_calibration.tolist(),
         "cells": cell_metrics,
         "folds": fold_records,
         "output_path": str(output_path),
@@ -389,7 +461,8 @@ def train_final_teacher(config: dict) -> dict[str, object]:
     metadata, targets = _load_arrays(config)
     section = config["spectral_teacher"]
     device = choose_device(str(config["runtime"].get("device", "auto")))
-    kernels = tuple(section.get("kernels", ["rq10", "rq20", "matern20"]))
+    kernel_settings = _kernel_settings(section)
+    kernels = tuple(name for name, _ in kernel_settings)
     with np.load(section["oof_output_path"]) as source:
         pas_weights = source["pas_weights"].astype(np.float32)
         pdp_weights = source["pdp_weights"].astype(np.float32)
@@ -399,6 +472,22 @@ def train_final_teacher(config: dict) -> dict[str, object]:
             auxiliary_weights_by_cell = 0.5 * (pas_weights + pdp_weights)
             auxiliary_weights_by_cell /= auxiliary_weights_by_cell.sum(axis=1, keepdims=True)
         outage_threshold = float(np.asarray(source["outage_threshold"]).item())
+        outage_threshold_by_cell = (
+            source["outage_threshold_by_cell"].astype(np.float32)
+            if "outage_threshold_by_cell" in source.files
+            else np.full(len(pas_weights), outage_threshold, dtype=np.float32)
+        )
+        power_calibration = (
+            source["power_calibration"].astype(np.float32)
+            if "power_calibration" in source.files
+            else np.column_stack(
+                [
+                    np.zeros(len(pas_weights), dtype=np.float32),
+                    np.zeros(len(pas_weights), dtype=np.float32),
+                    np.ones(len(pas_weights), dtype=np.float32),
+                ]
+            )
+        )
     test_positions = metadata["test_positions"].astype(np.float32)
     test_cells = metadata["test_cells"].astype(np.int64)
     test_features = metadata["test_geometry_features"].astype(np.float32)
@@ -413,10 +502,13 @@ def train_final_teacher(config: dict) -> dict[str, object]:
     test_outage_probability = np.zeros(len(test_positions), dtype=np.float32)
     state: dict[str, object] = {
         "kernels": list(kernels),
+        "kernel_feature_mixes": [mix for _, mix in kernel_settings],
         "pas_weights": pas_weights,
         "pdp_weights": pdp_weights,
         "auxiliary_weights": auxiliary_weights_by_cell,
         "outage_threshold": outage_threshold,
+        "outage_threshold_by_cell": outage_threshold_by_cell,
+        "power_calibration": power_calibration,
         "cells": {},
     }
     cell_records: list[dict[str, object]] = []
@@ -425,6 +517,7 @@ def train_final_teacher(config: dict) -> dict[str, object]:
             {
                 "seed": int(config["seed"]),
                 "kernels": kernels,
+                "kernel_feature_mixes": [mix for _, mix in kernel_settings],
                 "pas_weights": pas_weights.tolist(),
                 "pdp_weights": pdp_weights.tolist(),
                 "auxiliary_weights": auxiliary_weights_by_cell.tolist(),
@@ -468,11 +561,12 @@ def train_final_teacher(config: dict) -> dict[str, object]:
         target_matrix = _target_matrix(targets, spectral_training, pas_compressor, pdp_compressor)
         predictions: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
         gp_states: list[dict] = []
-        for kernel_name in kernels:
+        for kernel_name, feature_mix in kernel_settings:
             model = SharedMultiOutputGP(
                 str(kernel_name),
                 noise=float(section.get("gp_noise", 0.01)),
                 feature_length=float(section.get("feature_length", 1.0)),
+                feature_mix=float(feature_mix),
             ).fit(
                 metadata["train_positions"][spectral_training],
                 metadata["train_geometry_features"][spectral_training],
@@ -510,7 +604,7 @@ def train_final_teacher(config: dict) -> dict[str, object]:
             positive_weight=float(section.get("outage_positive_weight", 4.0)),
             false_kill_cost=float(section.get("false_kill_cost", 0.56)),
         ).fit(metadata["train_geometry_features"][training], targets["outage"][training].astype(np.int64))
-        classifier.threshold = outage_threshold
+        classifier.threshold = float(outage_threshold_by_cell[int(cell)])
         test_outage_probability[testing] = classifier.predict_proba(test_features[testing])
         state["cells"][int(cell)] = {
             "pas_compressor": pas_compressor.state_dict(),
@@ -539,6 +633,12 @@ def train_final_teacher(config: dict) -> dict[str, object]:
                 "test": int(len(testing)),
             }
         )
+    test_power, test_ue = apply_power_calibration(
+        test_power,
+        test_ue,
+        test_cells,
+        power_calibration,
+    )
     prior_path = Path(section["test_output_path"])
     prior_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -550,6 +650,8 @@ def train_final_teacher(config: dict) -> dict[str, object]:
         outage_probability=test_outage_probability,
         uncertainty=test_uncertainty,
         outage_threshold=np.asarray(outage_threshold, dtype=np.float32),
+        outage_threshold_by_cell=outage_threshold_by_cell,
+        power_calibration=power_calibration,
     )
     model_path = Path(section["model_path"])
     model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -559,8 +661,15 @@ def train_final_teacher(config: dict) -> dict[str, object]:
         "stage": "spectral_teacher_final",
         "cells": cell_records,
         "test_samples": int(len(test_positions)),
-        "predicted_outages": int(np.sum(test_outage_probability >= outage_threshold)),
+        "predicted_outages": int(
+            np.sum(
+                test_outage_probability
+                >= outage_threshold_by_cell[test_cells]
+            )
+        ),
         "outage_threshold": outage_threshold,
+        "outage_threshold_by_cell": outage_threshold_by_cell.tolist(),
+        "power_calibration": power_calibration.tolist(),
         "model_path": str(model_path),
         "test_output_path": str(prior_path),
         "elapsed_seconds": time.perf_counter() - started,

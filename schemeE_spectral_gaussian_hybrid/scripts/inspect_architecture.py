@@ -26,7 +26,11 @@ def main() -> None:
             if module.in_features >= 30_720 or module.out_features >= 30_720:
                 forbidden.append(name)
     report = {
-        "architecture": "spectral_gaussian_full_resolution_adapter_v1",
+        "architecture": (
+            "spectral_gaussian_reference_aware_v2"
+            if bool(config["hybrid"].get("reference_aware", False))
+            else "spectral_gaussian_full_resolution_adapter_v1"
+        ),
         "parameters": count_parameters(model),
         "trainable_parameters": count_parameters(model, trainable_only=True),
         "raw_channel_shape": list(shape.raw_shape),

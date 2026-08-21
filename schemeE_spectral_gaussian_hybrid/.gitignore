@@ -10,3 +10,7 @@ reports/generated/
 *.tar.gz
 *.tar.zst
 NO_AUTO_SHUTDOWN
+configs/v2_attempt*.json
+configs/v2_fold_best.json
+configs/v2_final_selected.json
+configs/v2_smoke_generated.json

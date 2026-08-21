@@ -96,7 +96,7 @@ def main() -> None:
                 f"- Selected projection iterations: `{hybrid.get('selected_projection_iterations', 'missing')}`",
                 f"- Spectral teacher PAS proxy accuracy: `{spectral.get('pas_accuracy', 'missing')}`",
                 f"- Spectral teacher PDP accuracy: `{spectral.get('pdp_accuracy', 'missing')}`",
-                f"- Per-BS / distance breakdown: `reports/generated/fold0_breakdown.json`",
+                "- Per-BS / distance breakdown: `reports/generated/fold0_breakdown.json`",
             ]
         )
     else:

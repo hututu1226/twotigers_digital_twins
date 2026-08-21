@@ -16,7 +16,6 @@ from .spatial_grid import (
     load_setup,
     make_grid_spec,
     nearest_neighbor_summary,
-    read_ascii_ply_xyz,
     test_like_validation_masks,
     test_support_summary,
     validation_support_summary,

@@ -6,12 +6,21 @@ from typing import Iterable
 
 import numpy as np
 import torch
+from scipy.optimize import minimize
 
 
 KERNEL_LENGTHS = {
+    "rq6": 6.0,
     "rq10": 10.0,
+    "rq14": 14.0,
     "rq20": 20.0,
+    "rq28": 28.0,
+    "rq40": 40.0,
+    "matern8": 8.0,
+    "matern12": 12.0,
+    "matern16": 16.0,
     "matern20": 20.0,
+    "matern28": 28.0,
 }
 
 
@@ -22,6 +31,7 @@ def _kernel(
     train_features: torch.Tensor,
     name: str,
     feature_length: float,
+    feature_mix: float = 0.5,
 ) -> torch.Tensor:
     if name not in KERNEL_LENGTHS:
         raise ValueError(f"Unknown GP kernel: {name}")
@@ -37,7 +47,10 @@ def _kernel(
     feature_distance = torch.cdist(query_features.float(), train_features.float())
     feature_distance = feature_distance / math.sqrt(max(query_features.shape[1], 1))
     feature_kernel = torch.exp(-0.5 * (feature_distance / float(feature_length)).square())
-    return spatial_kernel * (0.5 + 0.5 * feature_kernel)
+    mix = float(feature_mix)
+    if not 0.0 <= mix <= 1.0:
+        raise ValueError("feature_mix must be between zero and one")
+    return spatial_kernel * ((1.0 - mix) + mix * feature_kernel)
 
 
 @dataclass
@@ -45,6 +58,7 @@ class SharedMultiOutputGP:
     kernel_name: str
     noise: float = 0.01
     feature_length: float = 1.0
+    feature_mix: float = 0.5
     feature_mean: np.ndarray | None = None
     feature_std: np.ndarray | None = None
     target_mean: np.ndarray | None = None
@@ -95,6 +109,7 @@ class SharedMultiOutputGP:
             feature_tensor,
             self.kernel_name,
             self.feature_length,
+            self.feature_mix,
         )
         identity = torch.eye(len(covariance), device=target_device, dtype=covariance.dtype)
         jitter = max(float(self.noise), 1e-6)
@@ -164,6 +179,7 @@ class SharedMultiOutputGP:
                 train_feature_tensor,
                 self.kernel_name,
                 self.feature_length,
+                self.feature_mix,
             )
             predicted = cross @ alpha_tensor
             output[start:stop] = predicted.cpu().numpy() * target_std + target_mean
@@ -176,6 +192,7 @@ class SharedMultiOutputGP:
             "kernel_name": self.kernel_name,
             "noise": float(self.noise),
             "feature_length": float(self.feature_length),
+            "feature_mix": float(self.feature_mix),
             "feature_mean": self.feature_mean,
             "feature_std": self.feature_std,
             "target_mean": self.target_mean,
@@ -192,6 +209,7 @@ class SharedMultiOutputGP:
             kernel_name=str(state["kernel_name"]),
             noise=float(state["noise"]),
             feature_length=float(state["feature_length"]),
+            feature_mix=float(state.get("feature_mix", 0.5)),
         )
         for name in (
             "feature_mean",
@@ -250,8 +268,6 @@ def convex_cosine_weights(
     model_count = predictions.shape[0]
     if model_count == 1:
         return np.ones(1, dtype=np.float32)
-    if model_count != 3:
-        raise ValueError("Cosine grid search currently requires exactly three models")
     if scale <= 0.0:
         raise ValueError("Power log scale must be positive")
 
@@ -271,33 +287,44 @@ def convex_cosine_weights(
     prediction_gram = np.einsum(
         "msd,nsd->smn", prediction_power, prediction_power, optimize=True
     )
-    best_score = -float("inf")
-    best = np.full(3, 1.0 / 3.0, dtype=np.float64)
-    grid = np.arange(0.0, 1.0 + step * 0.5, step)
-    for first in grid:
-        for second in grid:
-            third = 1.0 - first - second
-            if third < -1e-9:
-                continue
-            weights = np.asarray([first, second, max(third, 0.0)], dtype=np.float64)
-            numerator = target_dot @ weights
-            prediction_norm = np.sqrt(
-                np.maximum(
-                    np.einsum(
-                        "i,sij,j->s",
-                        weights,
-                        prediction_gram,
-                        weights,
-                        optimize=True,
-                    ),
-                    1e-30,
-                )
+    def score(weights: np.ndarray) -> float:
+        numerator = target_dot @ weights
+        prediction_norm = np.sqrt(
+            np.maximum(
+                np.einsum(
+                    "i,sij,j->s",
+                    weights,
+                    prediction_gram,
+                    weights,
+                    optimize=True,
+                ),
+                1e-30,
             )
-            cosine = numerator / np.maximum(prediction_norm * target_norm, 1e-30)
-            score = float(np.mean(np.clip(cosine, 0.0, 1.0)))
-            if score > best_score:
-                best_score = score
-                best = weights
+        )
+        cosine = numerator / np.maximum(prediction_norm * target_norm, 1e-30)
+        return float(np.mean(np.clip(cosine, 0.0, 1.0)))
+
+    starts = [np.full(model_count, 1.0 / model_count, dtype=np.float64)]
+    starts.extend(np.eye(model_count, dtype=np.float64))
+    best = starts[0]
+    best_score = score(best)
+    constraints = ({"type": "eq", "fun": lambda value: float(value.sum() - 1.0)},)
+    bounds = [(0.0, 1.0)] * model_count
+    for start in starts:
+        result = minimize(
+            lambda value: -score(value),
+            start,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+            options={"maxiter": 200, "ftol": 1e-9, "disp": False},
+        )
+        candidate = np.clip(result.x if result.success else start, 0.0, 1.0)
+        candidate /= max(candidate.sum(), 1e-12)
+        candidate_score = score(candidate)
+        if candidate_score > best_score:
+            best_score = candidate_score
+            best = candidate
     return (best / best.sum()).astype(np.float32)
 
 
@@ -312,25 +339,31 @@ def convex_mse_weights(
     model_count = values.shape[0]
     if model_count == 1:
         return np.ones(1, dtype=np.float32)
-    if model_count != 3:
-        raise ValueError("MSE grid search currently requires exactly three models")
     scale = np.maximum(target.std(axis=0, dtype=np.float64), 1e-4).astype(np.float32)
     errors = (values - target[None]) / scale[None, None, :]
     gram = np.einsum("msd,nsd->mn", errors, errors, optimize=True)
     gram /= max(target.size, 1)
-    best_loss = float("inf")
-    best = np.full(3, 1.0 / 3.0, dtype=np.float64)
-    grid = np.arange(0.0, 1.0 + step * 0.5, step)
-    for first in grid:
-        for second in grid:
-            third = 1.0 - first - second
-            if third < -1e-9:
-                continue
-            weights = np.asarray([first, second, max(third, 0.0)], dtype=np.float64)
-            loss = float(weights @ gram @ weights)
-            if loss < best_loss:
-                best_loss = loss
-                best = weights
+    starts = [np.full(model_count, 1.0 / model_count, dtype=np.float64)]
+    starts.extend(np.eye(model_count, dtype=np.float64))
+    best = starts[0]
+    best_loss = float(best @ gram @ best)
+    constraints = ({"type": "eq", "fun": lambda value: float(value.sum() - 1.0)},)
+    bounds = [(0.0, 1.0)] * model_count
+    for start in starts:
+        result = minimize(
+            lambda value: float(value @ gram @ value),
+            start,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+            options={"maxiter": 200, "ftol": 1e-10, "disp": False},
+        )
+        candidate = np.clip(result.x if result.success else start, 0.0, 1.0)
+        candidate /= max(candidate.sum(), 1e-12)
+        loss = float(candidate @ gram @ candidate)
+        if loss < best_loss:
+            best_loss = loss
+            best = candidate
     return (best / best.sum()).astype(np.float32)
 
 
