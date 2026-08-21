@@ -69,6 +69,9 @@ def main() -> None:
             np.asarray(carrier_payload["qualities"], dtype=np.float64),
             np.asarray(carrier_payload["pair_counts"], dtype=np.int64),
         )
+    power_bounds = checkpoint.get("power_bounds")
+    if power_bounds is not None:
+        power_bounds = np.asarray(power_bounds, dtype=np.float32)
 
     def score(indices: np.ndarray) -> dict:
         if not len(indices):
@@ -79,7 +82,7 @@ def main() -> None:
             device, int(config["hybrid"].get("validation_batch_size", 2)), threshold,
             int(summary["selected_projection_iterations"]),
             spectral_targets=spectral_targets,
-            power_bounds=np.asarray(checkpoint.get("power_bounds"), dtype=np.float32),
+            power_bounds=power_bounds,
             reference_strategy=reference_strategy,
             outage_policy=outage_policy,
             carrier_fit=carrier_fit,

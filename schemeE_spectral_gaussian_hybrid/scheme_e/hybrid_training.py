@@ -125,6 +125,12 @@ def _build_model(
         ),
         station_count=(2 if bool(section.get("station_embedding", False)) else 0),
         maximum_power_delta=float(section.get("maximum_power_delta", 0.5)),
+        preserve_spectral_positions=bool(
+            section.get("preserve_spectral_positions", False)
+        ),
+        structured_spectral_field=bool(
+            section.get("structured_spectral_field", False)
+        ),
     ).to(device)
     if checkpoint_path is not None:
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -1007,7 +1013,9 @@ def train_hybrid(config: dict, final: bool = False) -> dict[str, object]:
     summary = {
         "stage": "hybrid_final" if final else "hybrid_fold0",
         "architecture": (
-            "spectral_gaussian_dual_seed_transport_v3"
+            "spectral_gaussian_structured_field_v4"
+            if bool(section.get("structured_spectral_field", False))
+            else "spectral_gaussian_dual_seed_transport_v3"
             if carrier_fit is not None
             else
             "spectral_gaussian_reference_aware_v2"

@@ -27,7 +27,9 @@ def main() -> None:
                 forbidden.append(name)
     report = {
         "architecture": (
-            "spectral_gaussian_dual_seed_transport_v3"
+            "spectral_gaussian_structured_field_v4"
+            if bool(config["hybrid"].get("structured_spectral_field", False))
+            else "spectral_gaussian_dual_seed_transport_v3"
             if bool(config["hybrid"].get("transport_seed", {}).get("enabled", False))
             else
             "spectral_gaussian_reference_aware_v2"
@@ -46,6 +48,10 @@ def main() -> None:
         "full_latent_linear_layers": forbidden,
         "full_resolution_check": not forbidden,
         "dual_seed_transport": bool(model.condition_encoder.transport_dim),
+        "preserve_spectral_positions": bool(
+            model.condition_encoder.preserve_spectral_positions
+        ),
+        "structured_spectral_field": model.spectral_field is not None,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if forbidden:

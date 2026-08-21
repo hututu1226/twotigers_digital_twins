@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from scheme_e.angle_delay import ChannelShape
+from scheme_e.autoencoder import FactorizedResidualAutoencoder
 from scheme_e.carrier_transport import (
     TRANSPORT_CONTEXT_DIM,
     build_transport_seed,
@@ -36,6 +37,7 @@ from scheme_e.rf_geometry import build_rf_gaussians, extract_geometry_features, 
 from scheme_e.spectral_targets import channel_spectral_targets, decode_pas_log, decode_pdp_log
 from scheme_e.splits import spatial_block_folds
 from scheme_e.hybrid_training import _build_model, _validation_mask
+from scheme_e.hybrid_model import SpectralGaussianHybrid, StructuredSpectralFieldEncoder
 
 
 def _shape() -> ChannelShape:
@@ -90,6 +92,76 @@ def test_relaxed_output_projection_preserves_requested_power() -> None:
         10.0, 0.5 * (requested_power[0] - targets["log_power"][0])
     )
     assert torch.allclose(projected[0], expected_first, atol=1e-5)
+
+
+def test_structured_spectral_field_preserves_absolute_grid_axes() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(19)
+    channel = torch.complex(
+        torch.randn(2, *shape.raw_shape, generator=generator),
+        torch.randn(2, *shape.raw_shape, generator=generator),
+    )
+    targets = channel_spectral_targets(channel, shape, proxy_count=2)
+    encoder = StructuredSpectralFieldEncoder(
+        shape,
+        proxy_count=2,
+        spectrum_channels=4,
+        detail_channels=6,
+        spectrum_size=(1, 1, 2),
+        detail_size=(2, 2, 4),
+    )
+    spectrum, detail = encoder(targets["pas_log"], targets["pdp_log"])
+    assert spectrum.shape == (2, 4, 1, 1, 2)
+    assert detail.shape == (2, 6, 2, 2, 4)
+    assert torch.isfinite(spectrum).all()
+    assert torch.isfinite(detail).all()
+
+
+def test_v4_structured_hybrid_forward_is_finite() -> None:
+    shape = ChannelShape(m=16, m_h=4, m_v=4, m_p=1, n=1, s=16)
+    autoencoder = FactorizedResidualAutoencoder(
+        shape,
+        spectrum_stem_channels=8,
+        phase_stem_channels=8,
+        spectrum_latent_channels=8,
+        phase_latent_channels=8,
+        residual_blocks=1,
+        detail_hidden_channels=16,
+        spectrum_decoder_channels=16,
+        detail_decoder_channels=16,
+    )
+    model = SpectralGaussianHybrid(
+        autoencoder,
+        shape,
+        proxy_count=2,
+        geometry_dim=71,
+        condition_width=16,
+        spectrum_blocks=1,
+        detail_blocks=1,
+        projection_iterations=1,
+        preserve_spectral_positions=True,
+        structured_spectral_field=True,
+    )
+    generator = torch.Generator().manual_seed(23)
+    channel = torch.complex(
+        torch.randn(2, *shape.raw_shape, generator=generator),
+        torch.randn(2, *shape.raw_shape, generator=generator),
+    )
+    targets = channel_spectral_targets(channel, shape, proxy_count=2)
+    result = model(
+        channel,
+        targets["pas_log"],
+        targets["pdp_log"],
+        targets["ue_log_energy"],
+        targets["log_power"],
+        torch.zeros(2),
+        torch.zeros(2),
+        torch.zeros(2, 71),
+    )
+    assert result["channel"].shape == channel.shape
+    assert result["spectrum_field"] is not None
+    assert result["detail_field"] is not None
+    assert torch.isfinite(result["channel"]).all()
 
 
 def test_rf_gaussians_produce_exactly_71_features() -> None:
@@ -307,6 +379,12 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_relaxed_output_projection(self) -> None:
         test_relaxed_output_projection_preserves_requested_power()
+
+    def test_structured_spectral_field(self) -> None:
+        test_structured_spectral_field_preserves_absolute_grid_axes()
+
+    def test_v4_structured_hybrid_forward(self) -> None:
+        test_v4_structured_hybrid_forward_is_finite()
 
     def test_gp(self) -> None:
         test_gp_and_convex_ensemble()

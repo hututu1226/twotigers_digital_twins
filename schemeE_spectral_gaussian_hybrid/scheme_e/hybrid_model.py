@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+import torch.nn.functional as functional
 
 from .angle_delay import ChannelShape, channel_to_shape_target, shape_to_channel
 from .autoencoder import FactorizedResidualAutoencoder
@@ -47,6 +48,7 @@ class SpectralConditionEncoder(nn.Module):
         reference_dim: int = 0,
         transport_dim: int = 0,
         station_count: int = 0,
+        preserve_spectral_positions: bool = False,
     ) -> None:
         super().__init__()
         self.shape = shape
@@ -54,6 +56,7 @@ class SpectralConditionEncoder(nn.Module):
         self.reference_dim = int(reference_dim)
         self.transport_dim = int(transport_dim)
         self.station_count = int(station_count)
+        self.preserve_spectral_positions = bool(preserve_spectral_positions)
         self.pas = nn.Sequential(
             nn.Conv2d(self.proxy_count + 1, width // 2, 3, padding=1),
             nn.GELU(),
@@ -76,6 +79,26 @@ class SpectralConditionEncoder(nn.Module):
             nn.GELU(),
             nn.Linear(width, width),
             nn.GELU(),
+        )
+        pas_width = (self.proxy_count + 1) * shape.m_v * shape.m_h
+        pdp_width = shape.n * shape.s
+        self.pas_position = (
+            nn.Sequential(
+                nn.Linear(pas_width, width),
+                nn.LayerNorm(width),
+                nn.GELU(),
+            )
+            if self.preserve_spectral_positions
+            else None
+        )
+        self.pdp_position = (
+            nn.Sequential(
+                nn.Linear(pdp_width, width),
+                nn.LayerNorm(width),
+                nn.GELU(),
+            )
+            if self.preserve_spectral_positions
+            else None
         )
         self.reference = (
             nn.Sequential(
@@ -106,6 +129,8 @@ class SpectralConditionEncoder(nn.Module):
             int(self.reference is not None)
             + int(self.transport is not None)
             + int(self.station is not None)
+            + int(self.pas_position is not None)
+            + int(self.pdp_position is not None)
         )
         self.output = nn.Sequential(
             nn.Linear(width * 2 + extra_width + shape.n + 3, width * 2),
@@ -137,6 +162,13 @@ class SpectralConditionEncoder(nn.Module):
             self.pdp(pdp.float()),
             self.geometry(geometry.float()),
         ]
+        if self.pas_position is not None and self.pdp_position is not None:
+            parts.extend(
+                [
+                    self.pas_position(pas_log.float()),
+                    self.pdp_position(pdp_log.float()),
+                ]
+            )
         if self.reference is not None:
             if reference_context is None:
                 raise ValueError("reference_context is required by this model")
@@ -159,6 +191,77 @@ class SpectralConditionEncoder(nn.Module):
         )
         values = torch.cat(parts, dim=1)
         return self.output(values)
+
+
+class StructuredSpectralFieldEncoder(nn.Module):
+    """Map absolute PAS/PDP bins onto the AE latent grids."""
+
+    def __init__(
+        self,
+        shape: ChannelShape,
+        proxy_count: int,
+        spectrum_channels: int,
+        detail_channels: int,
+        spectrum_size: tuple[int, int, int],
+        detail_size: tuple[int, int, int],
+    ) -> None:
+        super().__init__()
+        self.shape = shape
+        self.proxy_count = int(proxy_count)
+        self.spectrum_size = tuple(int(value) for value in spectrum_size)
+        self.detail_size = tuple(int(value) for value in detail_size)
+        input_channels = shape.n + 2
+        self.spectrum = nn.Sequential(
+            nn.Conv3d(input_channels, spectrum_channels, 3, padding=1),
+            nn.GroupNorm(_groups(spectrum_channels), spectrum_channels),
+            nn.GELU(),
+            nn.Conv3d(spectrum_channels, spectrum_channels, 3, padding=1),
+        )
+        self.detail = nn.Sequential(
+            nn.Conv3d(input_channels, detail_channels, 3, padding=1),
+            nn.GroupNorm(_groups(detail_channels), detail_channels),
+            nn.GELU(),
+            nn.Conv3d(detail_channels, detail_channels, 3, padding=1),
+        )
+        nn.init.zeros_(self.spectrum[-1].weight)
+        nn.init.zeros_(self.spectrum[-1].bias)
+        nn.init.zeros_(self.detail[-1].weight)
+        nn.init.zeros_(self.detail[-1].bias)
+
+    def _pooled(
+        self,
+        pas_log: torch.Tensor,
+        pdp_log: torch.Tensor,
+        output_size: tuple[int, int, int],
+    ) -> torch.Tensor:
+        proxy_elements = self.proxy_count * self.shape.m_v * self.shape.m_h
+        proxy = pas_log.float()[:, :proxy_elements].reshape(
+            -1, self.proxy_count, self.shape.m_v, self.shape.m_h
+        )
+        proxy = proxy.permute(0, 2, 3, 1).unsqueeze(1)
+        mean_pas = pas_log.float()[:, proxy_elements:].reshape(
+            -1, 1, self.shape.m_v, self.shape.m_h, 1
+        )
+        mean_pas = mean_pas.expand(-1, -1, -1, -1, self.proxy_count)
+        pdp = pdp_log.float().reshape(-1, self.shape.n, self.shape.s)
+        pdp = pdp[:, :, None, None, :].expand(
+            -1, -1, self.shape.m_v, self.shape.m_h, -1
+        )
+        return torch.cat(
+            [
+                functional.adaptive_avg_pool3d(proxy, output_size),
+                functional.adaptive_avg_pool3d(mean_pas, output_size),
+                functional.adaptive_avg_pool3d(pdp, output_size),
+            ],
+            dim=1,
+        )
+
+    def forward(
+        self, pas_log: torch.Tensor, pdp_log: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        spectrum = self.spectrum(self._pooled(pas_log, pdp_log, self.spectrum_size))
+        detail = self.detail(self._pooled(pas_log, pdp_log, self.detail_size))
+        return spectrum, detail
 
 
 class DualSeedMixer(nn.Module):
@@ -193,6 +296,7 @@ class FullResolutionLatentAdapter(nn.Module):
         condition_width: int,
         blocks: int,
         maximum_residual: float,
+        spatial_condition_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.maximum_residual = float(maximum_residual)
@@ -204,11 +308,30 @@ class FullResolutionLatentAdapter(nn.Module):
         nn.init.zeros_(self.output.weight)
         nn.init.zeros_(self.output.bias)
         self.gate_logit = nn.Parameter(torch.full((channels,), -2.0))
+        self.spatial_gate_logit = (
+            nn.Parameter(torch.full((channels,), -1.0))
+            if spatial_condition_enabled
+            else None
+        )
 
-    def forward(self, latent: torch.Tensor, condition: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        latent: torch.Tensor,
+        condition: torch.Tensor,
+        spatial_condition: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         scale, shift = self.condition(condition).chunk(2, dim=1)
         features = latent * (1.0 + 0.1 * torch.tanh(scale)[:, :, None, None, None])
         features = features + 0.1 * shift[:, :, None, None, None]
+        if spatial_condition is not None:
+            if spatial_condition.shape != latent.shape:
+                raise ValueError("spatial_condition must match the latent grid")
+            if self.spatial_gate_logit is None:
+                raise ValueError("this adapter was built without spatial conditioning")
+            spatial_gate = torch.sigmoid(self.spatial_gate_logit)[
+                None, :, None, None, None
+            ]
+            features = features + spatial_gate * spatial_condition
         residual = torch.tanh(self.output(self.blocks(features))) * self.maximum_residual
         gate = torch.sigmoid(self.gate_logit)[None, :, None, None, None]
         return latent + gate * residual, residual
@@ -234,6 +357,8 @@ class SpectralGaussianHybrid(nn.Module):
         transport_dim: int = 0,
         station_count: int = 0,
         maximum_power_delta: float = 0.5,
+        preserve_spectral_positions: bool = False,
+        structured_spectral_field: bool = False,
     ) -> None:
         super().__init__()
         self.autoencoder = autoencoder
@@ -251,6 +376,19 @@ class SpectralGaussianHybrid(nn.Module):
             reference_dim=reference_dim,
             transport_dim=transport_dim,
             station_count=station_count,
+            preserve_spectral_positions=preserve_spectral_positions,
+        )
+        self.spectral_field = (
+            StructuredSpectralFieldEncoder(
+                shape,
+                self.proxy_count,
+                autoencoder.spectrum_shape.channels,
+                autoencoder.phase_shape.channels,
+                autoencoder.spectrum_shape.tensor_shape[1:],
+                autoencoder.phase_shape.tensor_shape[1:],
+            )
+            if structured_spectral_field
+            else None
         )
         self.spectrum_seed_mixer = (
             DualSeedMixer(autoencoder.spectrum_shape.channels, condition_width)
@@ -267,12 +405,14 @@ class SpectralGaussianHybrid(nn.Module):
             condition_width,
             spectrum_blocks,
             maximum_spectrum_residual,
+            spatial_condition_enabled=structured_spectral_field,
         )
         self.detail_adapter = FullResolutionLatentAdapter(
             autoencoder.phase_shape.channels,
             condition_width,
             detail_blocks,
             maximum_detail_residual,
+            spatial_condition_enabled=structured_spectral_field,
         )
         self.power_head = nn.Sequential(
             nn.Linear(condition_width, condition_width),
@@ -378,8 +518,16 @@ class SpectralGaussianHybrid(nn.Module):
             )
         base_spectrum = spectrum_grid
         base_detail = detail_grid
-        adapted_spectrum, spectrum_residual = self.spectrum_adapter(spectrum_grid, condition)
-        adapted_detail, detail_residual = self.detail_adapter(detail_grid, condition)
+        spectrum_field = None
+        detail_field = None
+        if self.spectral_field is not None:
+            spectrum_field, detail_field = self.spectral_field(pas_log, pdp_log)
+        adapted_spectrum, spectrum_residual = self.spectrum_adapter(
+            spectrum_grid, condition, spectrum_field
+        )
+        adapted_detail, detail_residual = self.detail_adapter(
+            detail_grid, condition, detail_field
+        )
         decoded = self.autoencoder.decode(adapted_spectrum.flatten(1), adapted_detail.flatten(1))
         power_delta = self.maximum_power_delta * torch.tanh(
             self.power_head(condition).squeeze(1)
@@ -405,4 +553,6 @@ class SpectralGaussianHybrid(nn.Module):
             "detail_residual": detail_residual,
             "power": predicted_power,
             "power_delta": power_delta,
+            "spectrum_field": spectrum_field,
+            "detail_field": detail_field,
         }
