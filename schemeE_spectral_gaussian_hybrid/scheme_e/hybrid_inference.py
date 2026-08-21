@@ -16,6 +16,7 @@ from .hybrid_training import (
     load_hybrid_checkpoint,
 )
 from .power_safety import apply_outage_policy
+from .projection import relaxed_output_projection
 from .reference import build_reference_candidates
 from .reference_context import select_reference_candidates
 
@@ -117,6 +118,11 @@ def generate_test_channels(config: dict) -> dict[str, object]:
     if power_bounds is not None:
         power_bounds = np.asarray(power_bounds, dtype=np.float32)
     projection_iterations = int(section.get("projection_iterations", model.projection_iterations))
+    output_projection = section.get("output_projection", {})
+    output_projection_iterations = int(output_projection.get("iterations", 0))
+    output_projection_strengths = np.asarray(
+        output_projection.get("strength_by_cell", [0.0]), dtype=np.float32
+    ).reshape(-1)
     model.eval()
     for start in range(0, test_count, batch_size):
         stop = min(start + batch_size, test_count)
@@ -162,13 +168,33 @@ def generate_test_channels(config: dict) -> dict[str, object]:
                 distance_power=float(transport_config.get("distance_power", 2.0)),
             )
             inputs["transport_context"] = transport_context
-        result = model(
+        model_outputs = model(
             reference,
             transport_channel=transport_channel,
             projection_iterations=projection_iterations,
             **inputs,
-        )["channel"]
+        )
+        result = model_outputs["channel"]
         cells = metadata["test_cells"][indices].astype(np.int64)
+        if output_projection_iterations > 0:
+            result = relaxed_output_projection(
+                result,
+                inputs["pas_log"],
+                inputs["pdp_log"],
+                inputs["ue_log_energy"],
+                model_outputs["power"],
+                shape,
+                iterations=output_projection_iterations,
+                proxy_count=model.proxy_count,
+                strength=torch.as_tensor(
+                    output_projection_strengths[
+                        np.minimum(cells, len(output_projection_strengths) - 1)
+                    ],
+                    device=device,
+                ),
+                minimum_scale=float(output_projection.get("minimum_scale", 0.5)),
+                maximum_scale=float(output_projection.get("maximum_scale", 2.0)),
+            )
         threshold_batch = torch.as_tensor(
             thresholds[np.minimum(cells, len(thresholds) - 1)], device=device
         )
@@ -205,6 +231,12 @@ def generate_test_channels(config: dict) -> dict[str, object]:
         "outage_threshold_by_cell": thresholds.tolist(),
         "soft_outage_strength_by_cell": soft_strengths.tolist(),
         "projection_iterations": projection_iterations,
+        "output_projection": {
+            "iterations": output_projection_iterations,
+            "strength_by_cell": output_projection_strengths.tolist(),
+            "minimum_scale": float(output_projection.get("minimum_scale", 0.5)),
+            "maximum_scale": float(output_projection.get("maximum_scale", 2.0)),
+        },
         "reference_strategy": reference_strategy,
         "reference_distance_meters": {
             "minimum": float(np.min(distances[:, 0])),

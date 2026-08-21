@@ -30,6 +30,7 @@ from .hybrid_model import SpectralGaussianHybrid
 from .losses import metric_aligned_channel_losses, weighted_sum
 from .metrics import ChannelMetricAccumulator
 from .power_safety import apply_outage_policy, compute_power_bounds
+from .projection import relaxed_output_projection
 from .reference import build_reference_candidates, sample_references
 from .reference_context import (
     REFERENCE_CONTEXT_DIM,
@@ -320,6 +321,7 @@ def evaluate_hybrid(
     outage_policy: dict[str, object] | None = None,
     carrier_fit: CarrierFit | None = None,
     transport_config: dict[str, object] | None = None,
+    output_projection: dict[str, object] | None = None,
 ) -> dict[str, float | int]:
     observed_outage = metadata["outage"][observed_indices].astype(bool)
     transport_count = (
@@ -384,6 +386,14 @@ def evaluate_hybrid(
     target_strengths = strength_values[
         np.minimum(target_cells, len(strength_values) - 1)
     ]
+    output_projection = output_projection or {}
+    output_projection_iterations = int(output_projection.get("iterations", 0))
+    output_projection_strengths = np.asarray(
+        output_projection.get("strength_by_cell", [0.0]), dtype=np.float32
+    ).reshape(-1)
+    target_output_projection_strengths = output_projection_strengths[
+        np.minimum(target_cells, len(output_projection_strengths) - 1)
+    ]
     accumulator = ChannelMetricAccumulator(shape)
     gate_sums = np.zeros((2, 2), dtype=np.float64)
     gate_counts = np.zeros(2, dtype=np.int64)
@@ -437,6 +447,23 @@ def evaluate_hybrid(
             projection_iterations=projection_iterations,
             **inputs,
         )
+        predicted_channel = outputs["channel"]
+        if output_projection_iterations > 0:
+            predicted_channel = relaxed_output_projection(
+                predicted_channel,
+                inputs["pas_log"],
+                inputs["pdp_log"],
+                inputs["ue_log_energy"],
+                outputs["power"],
+                shape,
+                iterations=output_projection_iterations,
+                proxy_count=model.proxy_count,
+                strength=torch.as_tensor(
+                    target_output_projection_strengths[start:stop], device=device
+                ),
+                minimum_scale=float(output_projection.get("minimum_scale", 0.5)),
+                maximum_scale=float(output_projection.get("maximum_scale", 2.0)),
+            )
         if outputs["spectrum_transport_gate"] is not None:
             batch_cells = target_cells[start:stop]
             spectrum_gate = outputs["spectrum_transport_gate"].mean(
@@ -455,7 +482,7 @@ def evaluate_hybrid(
             target_strengths[start:stop], device=device
         )
         predicted = apply_outage_policy(
-            outputs["channel"],
+            predicted_channel,
             inputs["outage_probability"],
             threshold_batch,
             strength_batch,
@@ -476,6 +503,8 @@ def evaluate_hybrid(
                 )
             ),
             "reference_strategy": str((reference_strategy or {}).get("name", "nearest")),
+            "output_projection_iterations": output_projection_iterations,
+            "output_projection_strength_by_cell": output_projection_strengths.tolist(),
         }
     )
     if carrier_fit is not None:
