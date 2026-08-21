@@ -17,8 +17,9 @@ run python -m unittest discover -s tests -v
 attempt_configs=(
   configs/v4_attempt1_structured.json
   configs/v4_attempt2_decoder.json
+  configs/v4_attempt3_warm_structured.json
 )
-for index in 1 2; do
+for index in 1 2 3; do
   config="${attempt_configs[$((index-1))]}"
   run python scripts/train_hybrid.py --config "$config" --stage fold0 --resume
   run python scripts/verify_completion.py --config "$config" --stage fold0 \

@@ -8,6 +8,7 @@ from pathlib import Path
 ATTEMPTS = {
     1: "configs/v4_attempt1_structured.json",
     2: "configs/v4_attempt2_decoder.json",
+    3: "configs/v4_attempt3_warm_structured.json",
 }
 
 
@@ -21,13 +22,23 @@ def main() -> None:
     parser.add_argument("--report", default="reports/generated/v4_attempt_selection.json")
     args = parser.parse_args()
     candidates = []
+    skipped = []
     for attempt, config_path in ATTEMPTS.items():
         config = _read(config_path)
-        summary = _read(Path(config["hybrid"]["output_dir"]) / "summary.json")
-        policy = _read(f"reports/generated/v4_attempt{attempt}_policy.json")
-        projection = _read(
-            f"reports/generated/v4_attempt{attempt}_output_projection.json"
-        )
+        required = {
+            "summary": Path(config["hybrid"]["output_dir"]) / "summary.json",
+            "policy": Path(f"reports/generated/v4_attempt{attempt}_policy.json"),
+            "projection": Path(
+                f"reports/generated/v4_attempt{attempt}_output_projection.json"
+            ),
+        }
+        missing = [str(path) for path in required.values() if not path.is_file()]
+        if missing:
+            skipped.append({"attempt": attempt, "missing": missing})
+            continue
+        summary = _read(required["summary"])
+        policy = _read(required["policy"])
+        projection = _read(required["projection"])
         policy_score = float(policy["selected"]["score"])
         projection_score = float(projection["selected"]["score"])
         selected_projection = projection["selected"]
@@ -52,6 +63,8 @@ def main() -> None:
                 },
             }
         )
+    if not candidates:
+        raise RuntimeError("No completed Scheme E-v4 attempt is available")
     selected = max(candidates, key=lambda value: value["score"])
     selected_config = selected["config"]
     selected_config["inference"]["output_projection"] = selected[
@@ -70,6 +83,7 @@ def main() -> None:
         "selected_config": str(output),
         "selected_output_projection": selected["output_projection"],
         "recommended_for_submission": bool(selected["score"] >= 0.65),
+        "skipped_attempts": skipped,
         "candidates": [
             {
                 "attempt": int(value["attempt"]),

@@ -134,7 +134,23 @@ def _build_model(
     ).to(device)
     if checkpoint_path is not None:
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model"])
+        state = checkpoint["model"]
+        if bool(section.get("allow_partial_initial_checkpoint", False)):
+            current = model.state_dict()
+            compatible = {
+                name: value
+                for name, value in state.items()
+                if name in current and current[name].shape == value.shape
+            }
+            if not compatible:
+                raise RuntimeError("partial initial checkpoint has no compatible weights")
+            model.load_state_dict(compatible, strict=False)
+            print(
+                "Loaded partial initial checkpoint: "
+                f"{len(compatible)}/{len(current)} tensors from {checkpoint_path}"
+            )
+        else:
+            model.load_state_dict(state)
     else:
         checkpoint = {"autoencoder_checkpoint": ae_checkpoint.get("epoch")}
     return model, shape

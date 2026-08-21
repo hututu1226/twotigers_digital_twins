@@ -64,10 +64,30 @@ def main() -> None:
         }
     )
 
+    warm_structured = deepcopy(base)
+    warm_structured["seed"] = 2161
+    warm_structured["hybrid"].update(
+        {
+            "preserve_spectral_positions": False,
+            "structured_spectral_field": True,
+            "initial_checkpoint": "artifacts/v3/fold0_attempt3/hybrid/best.pt",
+            "allow_partial_initial_checkpoint": True,
+            "train_decoder": False,
+            "learning_rate": 0.00008,
+            "maximum_spectrum_residual": 0.5,
+            "maximum_detail_residual": 0.5,
+            "epochs": 700,
+            "early_stopping_patience": 100,
+            "maximum_training_hours": 2.5,
+            "output_dir": "artifacts/v4/fold0_attempt3/hybrid",
+        }
+    )
+
     paths = []
     for name, config in (
         ("v4_attempt1_structured.json", structured),
         ("v4_attempt2_decoder.json", decoder),
+        ("v4_attempt3_warm_structured.json", warm_structured),
     ):
         path = output_dir / name
         path.write_text(
