@@ -18,7 +18,8 @@
 | L0-010 | 归一化复数角时延残差是否存在不同于 AE Detail 的低秩结构。 | Fold0-train OOF teacher 残差拟合 PCA；分别测 magnitude/phase/complex oracle。 | rank64 magnitude 首次越过 0.65。 | oracle 0.663754 | 0.649174 | 0.766221 | 1.049267 | +0.036665 | PROMOTE | 0.004 h |
 | L0-011 | 幅度专用 log-power 表示能否用更干净的低秩系数保留 L0-010 上限。 | 全分辨率 log(1+4P) 残差 PCA，只做 magnitude oracle。 | rank8 已越过 0.65，rank128 达 0.762587。 | oracle 0.762587 | 0.795743 | 0.869032 | 1.068750 | +0.135498 | PROMOTE TO L1 | 0.003 h |
 | L1-003 | 三核共享多输出 GP 能否跨空间洞预测 rank8 幅度残差系数。 | 每个 BS 独立拟合 RQ10/RQ20/Matern20，固定等权；inner 仅选 0.5/1.0 修正强度。 | 系数 skill=-1.133，修正显著退化。 | inner 0.578980 | 0.559592 | 0.695186 | 1.595091 | -0.019753 | DROP | 0.004 h |
-| L1-004 | 完整能量图上的局部卷积修复能否避开不稳定的全局 PCA 坐标。 | OOF Teacher log-power 图输入；3D depthwise residual CNN；71维几何 FiLM；零初始化残差。 | READY | - | - | - | - | - | RUNNING | <=0.5 h |
+| L1-004 | 完整能量图上的局部卷积修复能否避开不稳定的全局 PCA 坐标。 | OOF Teacher log-power 图输入；3D depthwise residual CNN；71维几何 FiLM；零初始化残差。 | PAS/NMSE 改善，PDP 小幅退化，净增 +0.001211。 | inner 0.599955 | 0.590019 | 0.716790 | 1.589615 | +0.001211 | MODIFY_ONCE | 0.101 h |
+| L1-005 | 直接约束角度/时延能量边缘能否保住 L1-004 收益并修复 PDP。 | 模型、数据、采样均不变；仅增加固定权重的 PAS/PDP proxy cosine loss。 | READY | - | - | - | - | - | RUNNING | <=0.5 h |
 
 ## L0 结论
 
@@ -203,3 +204,21 @@ PCA 能用真值系数重建误差，但这些全局系数在新空间块上不�
 ### Next Action
 
 执行 L1-004 full-resolution magnitude refiner。仅当 inner gain 至少 `+0.004` 时训练一次严格 Fold0 模型。
+
+## L1-004
+
+### Result
+
+inner 基线 PAS=`0.586458`、PDP=`0.718097`、NMSE=`1.600037`、Score=`0.598744`。最佳 epoch10 为 PAS=`0.590019`、PDP=`0.716790`、NMSE=`1.589615`、Score=`0.599955`，净增 `+0.001211`。平均绝对 log-power 修正为 `0.13024`，总耗时 `364.02` 秒。
+
+### Interpretation
+
+完整网格卷积确实学到了可泛化的局部信号：PAS 和 NMSE 同时改善；但逐 bin 加权 Huber 没有直接约束能量边缘，PDP 的小幅下降抵消了大部分收益。这不是继续加宽网络的理由，而是一次明确的目标函数错位。
+
+### Decision
+
+`MODIFY_ONCE`。保持模型、数据、采样和训练预算不变，只加入一个固定权重的角度/时延能量边缘余弦项。若仍低于 `+0.004`，该模型族直接 DROP。
+
+### Repository Update
+
+代码提交：`9525b67`；云端报告：`research/scheme_e_065/L1_004_FULLRES_REFINER.json`；日志：`schemeE_spectral_gaussian_hybrid/logs/scheme_e_065_l1_004_fullres_refiner.log`。

@@ -49,6 +49,45 @@ def energy_weighted_log_power_loss(
     return (error * weights).sum() / weights.sum().clamp_min(1e-8)
 
 
+def magnitude_marginal_cosine_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    scale: float,
+    frequency_groups: int,
+) -> torch.Tensor:
+    """Align angle and delay energy marginals used by PAS/PDP-like metrics."""
+    if prediction.shape != target.shape or prediction.ndim != 5:
+        raise ValueError("prediction and target must share [B,C,V,H,S]")
+    groups = int(frequency_groups)
+    if groups < 1 or prediction.shape[1] % groups:
+        raise ValueError("frequency_groups must divide the channel count")
+    polarization = prediction.shape[1] // groups
+
+    def marginals(log_power: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        power = torch.expm1(log_power.float().clamp(0.0, 20.0)) / float(scale)
+        power = power.reshape(
+            len(power),
+            polarization,
+            groups,
+            power.shape[2],
+            power.shape[3],
+            power.shape[4],
+        )
+        angle = power.sum(dim=(1, 2, 5)).flatten(1)
+        delay = power.sum(dim=(1, 3, 4)).flatten(1)
+        return angle, delay
+
+    predicted_angle, predicted_delay = marginals(prediction)
+    target_angle, target_delay = marginals(target)
+    angle_accuracy = functional.cosine_similarity(
+        predicted_angle, target_angle, dim=1, eps=1e-8
+    ).clamp(0.0, 1.0)
+    delay_accuracy = functional.cosine_similarity(
+        predicted_delay, target_delay, dim=1, eps=1e-8
+    ).clamp(0.0, 1.0)
+    return 1.0 - 0.5 * (angle_accuracy.mean() + delay_accuracy.mean())
+
+
 class LocalMagnitudeBlock3d(nn.Module):
     def __init__(self, channels: int, delay_dilation: int, dropout: float) -> None:
         super().__init__()

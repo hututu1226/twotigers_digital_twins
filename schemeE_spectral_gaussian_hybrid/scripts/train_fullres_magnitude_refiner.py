@@ -27,6 +27,7 @@ from scheme_e.hybrid_training import load_hybrid_checkpoint
 from scheme_e.magnitude_refiner import (
     FullResolutionMagnitudeRefiner,
     energy_weighted_log_power_loss,
+    magnitude_marginal_cosine_loss,
 )
 
 
@@ -201,6 +202,7 @@ def _train_epoch(
     device: torch.device,
     rng: np.random.Generator,
     args: argparse.Namespace,
+    frequency_groups: int,
 ) -> float:
     model.train()
     order = rng.permutation(training)
@@ -243,6 +245,13 @@ def _train_epoch(
                 float(args.energy_emphasis),
                 float(args.maximum_energy_weight),
             )
+            if float(args.marginal_weight) > 0.0:
+                loss = loss + float(args.marginal_weight) * magnitude_marginal_cosine_loss(
+                    prediction,
+                    target,
+                    float(args.log_power_scale),
+                    int(frequency_groups),
+                )
         if not torch.isfinite(loss):
             raise RuntimeError("Magnitude refiner produced a non-finite loss")
         loss.backward()
@@ -443,6 +452,7 @@ def _train_with_validation(
             device,
             rng,
             args,
+            int(shape.n),
         )
         scheduler.step()
         metrics = None
@@ -501,6 +511,7 @@ def _train_fixed_epochs(
     device: torch.device,
     args: argparse.Namespace,
     epochs: int,
+    frequency_groups: int,
 ) -> list[dict[str, float]]:
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -527,6 +538,7 @@ def _train_fixed_epochs(
             device,
             rng,
             args,
+            int(frequency_groups),
         )
         scheduler.step()
         record = {
@@ -547,6 +559,12 @@ def _train_fixed_epochs(
 def _write_markdown(path: Path, report: dict[str, object]) -> None:
     inner = report["inner"]
     strict = report.get("strict_fold0")
+    marginal_weight = float(report["settings"].get("marginal_weight", 0.0))
+    experiment_name = (
+        "L1-005 Metric-Aligned Full-Resolution Magnitude Refiner"
+        if marginal_weight > 0.0
+        else "L1-004 Full-Resolution Magnitude Refiner"
+    )
     rows = [
         (
             "inner baseline",
@@ -570,7 +588,7 @@ def _write_markdown(path: Path, report: dict[str, object]) -> None:
         for name, metrics in rows
     )
     path.write_text(
-        f"""# L1-004 Full-Resolution Magnitude Refiner
+        f"""# {experiment_name}
 
 Fold0 is offline validation, not the official online score.
 
@@ -612,6 +630,7 @@ def main() -> None:
     parser.add_argument("--log-power-scale", type=float, default=4.0)
     parser.add_argument("--energy-emphasis", type=float, default=2.0)
     parser.add_argument("--maximum-energy-weight", type=float, default=12.0)
+    parser.add_argument("--marginal-weight", type=float, default=0.0)
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--validation-interval", type=int, default=2)
@@ -693,8 +712,9 @@ def main() -> None:
         strict_training=nonoutage_observed,
         strict_validation=validation,
     )
+    experiment_id = "L1-005" if float(args.marginal_weight) > 0.0 else "L1-004"
     print(
-        f"L1-004 inner_train={len(inner_training)} inner_val={len(inner_validation)} "
+        f"{experiment_id} inner_train={len(inner_training)} inner_val={len(inner_validation)} "
         f"grid={tuple(base_cache.shape[1:])}",
         flush=True,
     )
@@ -751,7 +771,10 @@ def main() -> None:
     report: dict[str, object] = {
         "status": "INNER_PASS" if inner_passed else "INNER_FAIL",
         "hypothesis": (
-            "A geometry-conditioned local 3D CNN can refine the complete OOF "
+            "Angle/delay marginal cosine supervision preserves the local CNN's "
+            "PAS and NMSE gains while preventing PDP regression."
+            if float(args.marginal_weight) > 0.0
+            else "A geometry-conditioned local 3D CNN can refine the complete OOF "
             "Teacher log-power grid across spatial holes without PCA coordinates."
         ),
         "git_commit": subprocess.check_output(
@@ -788,7 +811,13 @@ def main() -> None:
             "passed": inner_passed,
         },
         "strict_fold0": None,
-        "decision": "PENDING_STRICT" if inner_passed else "DROP",
+        "decision": (
+            "PENDING_STRICT"
+            if inner_passed
+            else "MODIFY_ONCE"
+            if inner_gain >= 0.001 and float(args.marginal_weight) <= 0.0
+            else "DROP"
+        ),
     }
     if not inner_passed:
         report["elapsed_seconds"] = time.perf_counter() - started
@@ -813,6 +842,7 @@ def main() -> None:
         device,
         args,
         int(best_epoch),
+        int(shape.n),
     )
     full_checkpoint = output_dir / "strict_full_train.pt"
     torch.save(

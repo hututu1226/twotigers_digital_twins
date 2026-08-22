@@ -41,6 +41,7 @@ from scheme_e.metrics import ChannelMetricAccumulator
 from scheme_e.magnitude_refiner import (
     FullResolutionMagnitudeRefiner,
     energy_weighted_log_power_loss,
+    magnitude_marginal_cosine_loss,
     normalize_log_power_grid,
 )
 from scheme_e.power_safety import (
@@ -299,7 +300,11 @@ def test_full_resolution_magnitude_refiner_starts_from_identity() -> None:
     loss = energy_weighted_log_power_loss(
         output["log_power"], expected * 1.05, scale=4.0
     )
+    marginal_loss = magnitude_marginal_cosine_loss(
+        output["log_power"], expected * 1.05, scale=4.0, frequency_groups=2
+    )
     assert torch.isfinite(loss)
+    assert torch.isfinite(marginal_loss)
     loss.backward()
     assert model.output.weight.grad is not None
 

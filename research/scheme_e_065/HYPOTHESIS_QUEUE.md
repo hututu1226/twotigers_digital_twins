@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | 完整 OOF Teacher 能量图包含足够线索，可由局部 3D 卷积修正其角度-时延纹理。 | L0-011 rank8 oracle 高，但 L1-003 PCA 系数相关为 `-0.248`；说明表示坐标不稳定，而非能量纹理没有上限。 | inner 至少 `+0.004`；严格 Fold0 争取 `+0.008` 到 `+0.025`。 | Teacher rank8 oracle `0.661765`，rank128 `0.755722`。 | 保留完整 16x8x8x192 图，零初始化小型 depthwise 3D CNN，71维几何仅作 FiLM。 | <=0.5 h | inner 最佳增益 `<0.004` 或训练升、验证持续降。 | 过 inner 后按最佳 epoch 全 Fold0-train 重训一次。 |
+| 1 | L1-004 的局部卷积信号可通过 metric-aligned 能量边缘约束转化为净分数。 | L1-004 PAS `+0.003561`、NMSE 改善 `0.010421`，但 PDP `-0.001307`，最终仅 `+0.001211`。 | inner 至少 `+0.004`。 | Teacher magnitude oracle `0.661765+`。 | 架构与采样完全不变，只加入固定权重 angle/delay marginal cosine loss。 | <=0.5 h | inner gain `<0.004`；这是该模型族最后一次修改。 | 过 inner 后按最佳 epoch全 Fold0-train重训一次。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量，但当前候选 Router OOF 增益为 0。 | `+0.003` 到 `+0.010`。 | 必须先有新的二专家 oracle `>=+0.010`。 | 新候选产生后先算二专家 oracle。 | <=0.2 h | 无新候选或 oracle 增益 `<0.010`。 | 只允许 OOF gate。 |
 
 ## 已 DROP

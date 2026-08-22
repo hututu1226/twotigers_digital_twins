@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: full_resolution_magnitude_refiner_ready
+status: metric_aligned_fullres_refiner_ready
 authoritative_best: 0.627089141574626
 target_score: 0.65000
 official_online_score: 0.59
@@ -14,10 +14,10 @@ best_artifact_paths:
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
 current_hypothesis: >-
-  A geometry-conditioned 3D convolutional refiner can learn local sharpening
-  and displacement of the complete OOF Teacher log-power grid without reducing
-  it to globally unstable PCA coefficients.
-current_experiment: L1-004
+  Adding one angle/delay marginal cosine term to the otherwise unchanged
+  full-resolution refiner preserves its PAS and NMSE gains while preventing
+  the observed PDP regression.
+current_experiment: L1-005
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -33,6 +33,7 @@ completed_experiments:
   - L0-010_train_only_complex_angle_delay_residual_oracle
   - L0-011_train_only_full_resolution_log_power_residual_oracle
   - L1-003_rank8_magnitude_coefficient_gp_probe
+  - L1-004_full_resolution_magnitude_refiner_probe
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -44,16 +45,16 @@ dropped_families:
   - rank16_residual_candidate_routing
   - rank8_magnitude_coefficient_gp_regression
 pending_queue:
-  - L1-004_full_resolution_magnitude_refiner_probe
+  - L1-005_metric_aligned_full_resolution_refiner
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.138
+gpu_hours_used: 0.239
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_fullres_refiner_probe.sh
-git_commit: pending_l1_004_commit
-last_update_time: 2026-08-22T16:40:00+08:00
+  bash scripts/run_scheme_e_065_metric_refiner_probe.sh
+git_commit: pending_l1_005_commit
+last_update_time: 2026-08-22T17:02:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -74,3 +75,5 @@ notes:
   - L1-003 inner baseline was 0.598732; alpha0.5/1.0 fell to 0.578980/0.557679.
   - L1-003 coefficient skill was -1.133 and flat correlation was -0.248, so global PCA coordinates are not spatially predictable.
   - L1-004 keeps the complete 16x8x8x192 magnitude grid and predicts only a bounded local convolutional correction.
+  - L1-004 improved inner Score by 0.001211 at epoch10, with PAS +0.003561 and NMSE lower by 0.010421.
+  - L1-004 lost 0.001307 PDP, so its single allowed modification adds a fixed angle/delay marginal cosine term.
