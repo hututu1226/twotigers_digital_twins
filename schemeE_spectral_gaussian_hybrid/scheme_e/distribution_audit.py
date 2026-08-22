@@ -269,6 +269,104 @@ def weighted_aggregate_sample_metrics(
     }
 
 
+def periodic_cell_holdout_mask(
+    positions: np.ndarray,
+    cell_ids: np.ndarray,
+    *,
+    cell_id: int,
+    tile_meters: float,
+    hole_meters: float,
+    phase_x: float,
+    phase_y: float,
+) -> np.ndarray:
+    """Select one cell's periodic square holes at an explicit phase."""
+
+    xy = np.asarray(positions, dtype=np.float64)[:, :2]
+    cells = np.asarray(cell_ids, dtype=np.int64)
+    if len(xy) != len(cells):
+        raise ValueError("positions and cells have different lengths")
+    if not 0.0 < float(hole_meters) < float(tile_meters):
+        raise ValueError("hole_meters must be positive and smaller than tile_meters")
+    local_x = np.mod(xy[:, 0] - float(phase_x), float(tile_meters))
+    local_y = np.mod(xy[:, 1] - float(phase_y), float(tile_meters))
+    return (
+        (cells == int(cell_id))
+        & (local_x < float(hole_meters))
+        & (local_y < float(hole_meters))
+    )
+
+
+def distribution_signature_distance(
+    reference: np.ndarray,
+    target: np.ndarray,
+) -> float:
+    """Compare robust per-feature moments without fitting a domain classifier."""
+
+    left = np.asarray(reference, dtype=np.float64)
+    right = np.asarray(target, dtype=np.float64)
+    if left.ndim != 2 or right.ndim != 2 or left.shape[1] != right.shape[1]:
+        raise ValueError("distribution feature matrices do not match")
+    if not len(left) or not len(right):
+        raise ValueError("distribution feature matrices must be nonempty")
+    pooled = np.concatenate([left, right], axis=0)
+    scale = np.maximum(np.std(pooled, axis=0), 1e-6)
+    quantiles = np.asarray([0.10, 0.25, 0.50, 0.75, 0.90])
+    left_summary = np.concatenate(
+        [
+            left.mean(axis=0, keepdims=True),
+            left.std(axis=0, keepdims=True),
+            np.quantile(left, quantiles, axis=0),
+        ],
+        axis=0,
+    )
+    right_summary = np.concatenate(
+        [
+            right.mean(axis=0, keepdims=True),
+            right.std(axis=0, keepdims=True),
+            np.quantile(right, quantiles, axis=0),
+        ],
+        axis=0,
+    )
+    standardized = np.abs(left_summary - right_summary) / scale[None, :]
+    return float(np.mean(np.clip(standardized, 0.0, 10.0)))
+
+
+def test_matched_holdout_gate(
+    *,
+    samples: int,
+    cell_counts: Mapping[int | str, int],
+    nearest_median_gap_m: float,
+    support_domain_auc: float,
+    link_environment_domain_auc: float,
+    current_link_environment_auc: float,
+    minimum_samples: int = 450,
+    maximum_samples: int = 650,
+    minimum_samples_per_cell: int = 200,
+    maximum_nearest_median_gap_m: float = 2.0,
+    maximum_support_domain_auc: float = 0.70,
+    minimum_link_auc_reduction: float = 0.10,
+) -> tuple[bool, list[str]]:
+    """Apply the preregistered promotion gate for a test-matched holdout."""
+
+    reasons: list[str] = []
+    if not int(minimum_samples) <= int(samples) <= int(maximum_samples):
+        reasons.append("sample_count")
+    if not cell_counts or min(int(value) for value in cell_counts.values()) < int(
+        minimum_samples_per_cell
+    ):
+        reasons.append("cell_balance")
+    if float(nearest_median_gap_m) > float(maximum_nearest_median_gap_m):
+        reasons.append("nearest_support")
+    if float(support_domain_auc) > float(maximum_support_domain_auc):
+        reasons.append("support_domain_auc")
+    required_link_auc = float(current_link_environment_auc) - float(
+        minimum_link_auc_reduction
+    )
+    if float(link_environment_domain_auc) > required_link_auc:
+        reasons.append("link_environment_domain_auc")
+    return not reasons, reasons
+
+
 def legacy_spatial_block_split(
     positions: np.ndarray,
     cell_labels: np.ndarray,

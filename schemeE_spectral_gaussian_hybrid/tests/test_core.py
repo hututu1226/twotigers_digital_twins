@@ -41,8 +41,11 @@ from scheme_e.diagnostics import (
     target_informed_expert_oracle,
 )
 from scheme_e.distribution_audit import (
+    distribution_signature_distance,
     fixed_bin_importance_weights,
+    periodic_cell_holdout_mask,
     same_cell_support_features,
+    test_matched_holdout_gate,
     weighted_aggregate_sample_metrics,
 )
 from scheme_e.metrics import ChannelMetricAccumulator
@@ -924,6 +927,60 @@ def test_distribution_audit_uniform_weighted_metrics_match_canonical() -> None:
         assert abs(float(canonical[name]) - float(weighted[name])) < 1e-12
 
 
+def test_periodic_holdout_is_cell_scoped_and_phase_sensitive() -> None:
+    positions = np.asarray(
+        [[1.0, 1.0], [11.0, 1.0], [1.0, 1.0], [11.0, 1.0]],
+        dtype=np.float64,
+    )
+    cells = np.asarray([0, 0, 1, 1])
+    first = periodic_cell_holdout_mask(
+        positions,
+        cells,
+        cell_id=0,
+        tile_meters=10.0,
+        hole_meters=3.0,
+        phase_x=0.0,
+        phase_y=0.0,
+    )
+    shifted = periodic_cell_holdout_mask(
+        positions,
+        cells,
+        cell_id=1,
+        tile_meters=10.0,
+        hole_meters=3.0,
+        phase_x=5.0,
+        phase_y=0.0,
+    )
+    np.testing.assert_array_equal(first, [True, True, False, False])
+    assert not np.any(shifted)
+
+
+def test_distribution_signature_and_holdout_gate() -> None:
+    target = np.asarray([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])
+    assert distribution_signature_distance(target, target.copy()) == 0.0
+    assert distribution_signature_distance(target + 10.0, target) > 1.0
+    promoted, reasons = test_matched_holdout_gate(
+        samples=520,
+        cell_counts={0: 260, 1: 260},
+        nearest_median_gap_m=0.5,
+        support_domain_auc=0.62,
+        link_environment_domain_auc=0.84,
+        current_link_environment_auc=0.996,
+    )
+    assert promoted
+    assert reasons == []
+    promoted, reasons = test_matched_holdout_gate(
+        samples=520,
+        cell_counts={0: 199, 1: 321},
+        nearest_median_gap_m=0.5,
+        support_domain_auc=0.62,
+        link_environment_domain_auc=0.92,
+        current_link_environment_auc=0.996,
+    )
+    assert not promoted
+    assert reasons == ["cell_balance", "link_environment_domain_auc"]
+
+
 class SchemeECoreTests(unittest.TestCase):
     def test_carrier_quality_gate(self) -> None:
         test_carrier_quality_gate_keeps_reliable_fit_and_replaces_weak_fit()
@@ -1052,6 +1109,10 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_distribution_weighted_metrics(self) -> None:
         test_distribution_audit_uniform_weighted_metrics_match_canonical()
+
+    def test_periodic_holdout_search_helpers(self) -> None:
+        test_periodic_holdout_is_cell_scoped_and_phase_sensitive()
+        test_distribution_signature_and_holdout_gate()
 
     def test_final_projection_override_is_declared(self) -> None:
         import inspect

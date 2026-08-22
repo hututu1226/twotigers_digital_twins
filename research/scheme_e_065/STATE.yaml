@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: test_geometry_shift_audit_design
+status: test_matched_spatial_holdout_search
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -15,9 +15,10 @@ best_artifact_paths:
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
   prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  The offline/online score reversal may be explained by observable geometry
-  shift between the old validation holes, strict Fold0, and the 500 test points.
-current_experiment: L0-023
+  Strict Fold0 matches the test support distance but not its RF-environment
+  distribution; independent per-cell periodic phases may produce a more
+  decision-relevant holdout without using any test channel labels.
+current_experiment: L0-024
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -48,6 +49,7 @@ completed_experiments:
   - L0-021_observed_phase_transport_probe
   - L1-006_query_conditioned_local_set_fullres_magnitude_probe
   - L0-022_quality_gated_aligned_magnitude_transfer
+  - L0-023_test_geometry_shift_audit
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -67,16 +69,17 @@ dropped_families:
   - query_conditioned_local_set_fullres_magnitude
   - quality_gated_aligned_magnitude_as_primary_route
 pending_queue:
-  - L0-023_test_geometry_shift_audit
+  - L0-024_test_matched_periodic_holdout_search
+  - one_test_matched_retrain_only_if_l0_024_fixed_gate_passes
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.817
+gpu_hours_used: 0.825
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
-  Run a CPU-only L0-023 audit of support distance, local density, 71D geometry
-  shift, domain-classifier AUC, and test-geometry-reweighted Fold0 metrics.
-git_commit: a89ca13
-last_update_time: 2026-08-22T21:05:00+08:00
+  python scripts/search_test_matched_holdout.py --config
+  configs/v4_attempt1_structured.json
+git_commit: efb0d9a
+last_update_time: 2026-08-22T22:17:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -129,3 +132,8 @@ notes:
   - L0-022 strict Score was 0.633628 (+0.002047); PAS, PDP, and NMSE all improved slightly.
   - L0-022 missed the fixed +0.003 direct gate and its two-expert oracle was only 0.640268.
   - L0-022 is retained only as a minor diagnostic artifact; the protocol-authoritative baseline remains 0.631581.
+  - L0-023 found nearest-support medians of 6.578 m for strict Fold0, 21.594 m for old Scheme1 validation, and 6.199 m for test.
+  - L0-023 support-only strict-to-test domain AUC was 0.595935, so interpolation distance and density are representative.
+  - L0-023 link/environment domain AUC was 0.996294, showing a major observable RF-regime shift despite matched support difficulty.
+  - L0-023 test-distance-reweighted L0-022 gain was only +0.002316; BS0/BS1 strict gains were +0.000184/+0.004139, so the fixed candidate gate still failed.
+  - All five original periodic folds had link/environment AUC above 0.993; simply switching Fold0 to another existing fold is not supported.

@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | Scheme1 `0.3925` 离线但官方 `0.62`，Scheme E 严格 Fold0 `0.6316` 但旧线上仅 `0.59`，可能存在验证空洞与真实测试几何难度不匹配。 | 测试位置和 Fold0 都可在不使用测试信道标签的前提下计算同基站支撑距离、密度和 71D 几何；当前只看了总体距离摘要。 | 解释线上/离线反转，并确定严格 Fold0 是否应继续作为唯一决策门槛。 | 不适用；这是分布诊断，不产生可部署分数。 | 固定比较旧 Scheme1 验证、strict Fold0 和 test 的距离/密度/几何分布；用域分类 AUC 量化可分性，并按 test 几何重加权 Fold0 指标。 | CPU, <=0.05 h | test 与 strict Fold0 高度一致且重加权结论不变。 | 若明显偏移，重建 test-matched 多 Fold；否则关闭“验证集不匹配”解释。 |
+| 1 | 当前 periodic Fold0 与 test 的邻点距离匹配，但 link/environment 域 AUC=`0.9963`；为两个基站独立选择 periodic phase，可能得到更像测试场景的验证洞。 | L0-023 已确认 support-only AUC=`0.5959`、最近距离中位数仅差 `0.380 m`，但五个现有 Fold 的 link/environment AUC 均 `>0.993`。 | 建立更可信的离线决策集，避免继续优化只对 Fold0 有效的方向。 | 不适用；搜索阶段不读任何信道标签。 | 固定 `72 m` tile、`26 m` hole，先按无标签分布签名筛 phase，再对少量组合计算域 AUC。仅当样本 450-650、每 cell>=200、最近距离差<=2m、support AUC<=0.70 且 link AUC 至少下降 0.10 时晋级。 | CPU, <=0.10 h | 最佳组合仍未通过任一固定门槛。 | 通过才允许一次 test-matched V4 复训；否则 DROP periodic-phase matching。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量；L0-022 二专家 oracle 仅 `0.640268`。 | `+0.003` 到 `+0.010`。 | 新候选需把 oracle 推到 `>0.66`。 | 新候选产生后先算联合 oracle。 | <=0.2 h | oracle `<0.66`。 | 只有过线后才允许严格 OOF gate。 |
 
 ## 已 DROP
@@ -26,6 +26,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 - observed neighbor phase transport：最近邻/相干融合均下降，十专家 oracle 仅 `0.646909`。
 - query-conditioned local-set full-resolution magnitude：inner best epoch0、增益 `0.000000`；所有非零修正显著下降。
 - quality-gated aligned magnitude composition：strict `0.633628`，虽有 `+0.002047` 真增益，但低于固定 `+0.003` 门槛；二专家 oracle 仅 `0.640268`。候选文件保留用于诊断，不作为主路线。
+- 旧 Scheme1 空洞可代表真实测试难度：旧验证最近支撑中位数 `21.594 m`，test 仅 `6.199 m`；该解释已被 L0-023 否定。
 - AE Detail latent residual：即使 rank128 target-informed oracle 也只有 `0.631194`。
 - 邻居权重、投影轮数、少量 loss 权重和无证据扩容的连续扫描。
 
