@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from scheme_e.angle_delay import ChannelShape
+from scheme_e.adaptive_experiment import adaptive_hybrid_config
 from scheme_e.autoencoder import FactorizedResidualAutoencoder
 from scheme_e.carrier_transport import (
     TRANSPORT_CONTEXT_DIM,
@@ -779,6 +780,29 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_local_magnitude_transfer(self) -> None:
         test_local_magnitude_transfer_uses_same_cell_residuals()
+
+    def test_adaptive_hybrid_config_is_scoped(self) -> None:
+        base = {
+            "spectral_teacher": {"oof_output_path": "base.npz"},
+            "hybrid": {
+                "output_dir": "base",
+                "learning_rate": 2e-4,
+                "structured_spectral_field": True,
+            },
+        }
+        prepared = adaptive_hybrid_config(
+            base,
+            adaptive_prior="adaptive.npz",
+            initial_checkpoint="best.pt",
+            output_dir="new",
+        )
+        self.assertEqual(
+            prepared["spectral_teacher"]["oof_output_path"], "adaptive.npz"
+        )
+        self.assertEqual(prepared["hybrid"]["initial_checkpoint"], "best.pt")
+        self.assertEqual(prepared["hybrid"]["output_dir"], "new")
+        self.assertTrue(prepared["hybrid"]["structured_spectral_field"])
+        self.assertEqual(base["spectral_teacher"]["oof_output_path"], "base.npz")
 
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()

@@ -20,7 +20,8 @@
 | L1-003 | 三核共享多输出 GP 能否跨空间洞预测 rank8 幅度残差系数。 | 每个 BS 独立拟合 RQ10/RQ20/Matern20，固定等权；inner 仅选 0.5/1.0 修正强度。 | 系数 skill=-1.133，修正显著退化。 | inner 0.578980 | 0.559592 | 0.695186 | 1.595091 | -0.019753 | DROP | 0.004 h |
 | L1-004 | 完整能量图上的局部卷积修复能否避开不稳定的全局 PCA 坐标。 | OOF Teacher log-power 图输入；3D depthwise residual CNN；71维几何 FiLM；零初始化残差。 | PAS/NMSE 改善，PDP 小幅退化，净增 +0.001211。 | inner 0.599955 | 0.590019 | 0.716790 | 1.589615 | +0.001211 | MODIFY_ONCE | 0.101 h |
 | L1-005 | 直接约束角度/时延能量边缘能否保住 L1-004 收益并修复 PDP。 | 模型、数据、采样均不变；仅增加固定权重的 PAS/PDP proxy cosine loss。 | best epoch0，所有修正均低于基线。 | inner 0.598744 | 0.586458 | 0.718097 | 1.600037 | +0.000000 | DROP | 0.064 h |
-| L0-012 | 邻近观测点的完整 Teacher 幅度误差是否可直接迁移到查询点。 | 同 BS 最近 1/4/8 个点的 target-minus-OOF-teacher log-power 残差；只在 inner split 选固定强度。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
+| L0-012 | 邻近观测点的完整 Teacher 幅度误差是否可直接迁移到查询点。 | 同 BS 最近 1/4/8 个点的 target-minus-OOF-teacher log-power 残差；只在 inner split 选固定强度。 | 直接候选退化，但与 V4 的二专家 oracle 提升 0.019597。 | 0.615896 | 0.555455 | 0.764117 | 1.270997 | -0.011193 | KEEP_AS_EXPERT | 0.028 h |
+| L2-001 | 已提升的 adaptive Teacher 需要重新适配 Hybrid 才能把粗谱收益传到最终信道。 | V4 架构和 AE 不变；以 V4 best 初始化，只替换 leakage-safe adaptive OOF priors 并低学习率微调。 | READY | - | - | - | - | - | RUNNING | <=1.25 h |
 
 ## L0 结论
 
@@ -241,3 +242,21 @@ inner 基线 PAS=`0.586458`、PDP=`0.718097`、NMSE=`1.600037`、Score=`0.598744
 ### Next Action
 
 执行 L0-012，直接检查真实邻点的完整幅度残差在空间上是否可迁移，为新的局部上下文模型提供或否定证据。
+
+## L0-012
+
+### Result
+
+inner 选择 `k8, strength=0.25`，但严格 Fold0 仅为 PAS=`0.555455`、PDP=`0.764117`、NMSE=`1.270997`、Score=`0.615896`，比 V4 低 `0.011193`。与 V4 的逐样本诊断 oracle 为 `0.646686`，提升 `0.019597`，其中 oracle 选择 V4 324 个样本、local transfer 241 个样本。总耗时 102.26 秒。
+
+### Interpretation
+
+局部误差不是整体可平移的：直接搬运会明显破坏 PAS，但候选确实在一部分样本上与 V4 互补。由于完美 Router 的上限仍低于 0.65，当前证据不支持投入复杂 Router；该候选只保留为专家资产。
+
+### Decision
+
+`KEEP_AS_EXPERT`，但暂不训练 Router。
+
+### Next Action
+
+执行 L2-001。adaptive Teacher 的 coarse PAS/PDP 已有独立严格提升，验证针对新先验微调 Hybrid 能否修复此前的 metric bridge 损失。
