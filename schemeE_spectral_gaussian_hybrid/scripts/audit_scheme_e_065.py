@@ -170,6 +170,7 @@ def _append_metrics(
     legacy[stage].update(prediction, target, true_outage)
 
 
+@torch.no_grad()
 def _collect_variant(
     *,
     name: str,
@@ -401,7 +402,9 @@ def _collect_variant(
         if output is not None:
             output[start:stop] = final.detach().cpu().numpy().astype(np.complex64)
         if comparison is not None:
-            base = torch.as_tensor(np.asarray(comparison[start:stop]), device=device)
+            base = torch.as_tensor(
+                np.array(comparison[start:stop], copy=True), device=device
+            )
             numerator = (final - base).abs().square().sum(dim=(1, 2, 3)).double()
             denominator = base.abs().square().sum(dim=(1, 2, 3)).double().clamp_min(1e-30)
             disagreement[start:stop] = (numerator / denominator).cpu().numpy()
@@ -433,6 +436,7 @@ def _collect_variant(
     }
 
 
+@torch.no_grad()
 def _saved_roundtrip(
     path: Path,
     channels: np.ndarray,
@@ -447,7 +451,9 @@ def _saved_roundtrip(
     legacy = ChannelMetricAccumulator(shape)
     for start in range(0, len(validation), batch_size):
         stop = min(start + batch_size, len(validation))
-        pred = torch.as_tensor(np.asarray(prediction[start:stop]), device=device)
+        pred = torch.as_tensor(
+            np.array(prediction[start:stop], copy=True), device=device
+        )
         target = torch.as_tensor(np.asarray(channels[validation[start:stop]]), device=device)
         true_outage = torch.as_tensor(outage[validation[start:stop]], device=device)
         batches.append(sample_metric_batch(pred, target, shape, true_outage))
