@@ -16,6 +16,7 @@ from .gp import (
     ensemble_log_power_predictions,
     ensemble_predictions,
 )
+from .local_spectral import local_expert_settings, local_spectral_prediction
 from .outage import OutageEnsemble, binary_metrics
 from .power_safety import apply_power_calibration, fit_power_calibration
 from .spectral_compression import SpectralCompressor
@@ -142,14 +143,17 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
     if not kernel_settings:
         raise ValueError("At least one spectral GP kernel is required")
     kernels = tuple(name for name, _ in kernel_settings)
+    local_settings = local_expert_settings(section)
+    expert_names = kernels + tuple(name for name, _, _ in local_settings)
+    expert_count = len(expert_names)
     pas_width = targets["pas_log"].shape[1]
     pdp_width = targets["pdp_log"].shape[1]
     ue_dim = targets["ue_log_energy"].shape[1]
-    kernel_pas = np.zeros((len(kernels), len(targets["outage"]), pas_width), dtype=np.float32)
-    kernel_pdp = np.zeros((len(kernels), len(targets["outage"]), pdp_width), dtype=np.float32)
-    kernel_ue = np.zeros((len(kernels), len(targets["outage"]), ue_dim), dtype=np.float32)
-    kernel_power = np.zeros((len(kernels), len(targets["outage"])), dtype=np.float32)
-    kernel_uncertainty = np.zeros((len(kernels), len(targets["outage"])), dtype=np.float32)
+    kernel_pas = np.zeros((expert_count, len(targets["outage"]), pas_width), dtype=np.float32)
+    kernel_pdp = np.zeros((expert_count, len(targets["outage"]), pdp_width), dtype=np.float32)
+    kernel_ue = np.zeros((expert_count, len(targets["outage"]), ue_dim), dtype=np.float32)
+    kernel_power = np.zeros((expert_count, len(targets["outage"])), dtype=np.float32)
+    kernel_uncertainty = np.zeros((expert_count, len(targets["outage"])), dtype=np.float32)
     available = np.zeros(len(targets["outage"]), dtype=np.bool_)
     outage_probability = np.zeros(len(targets["outage"]), dtype=np.float32)
     fold_records: list[dict[str, object]] = []
@@ -160,6 +164,7 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
                 "selected": hashlib.sha256(selected.tobytes()).hexdigest(),
                 "kernels": kernels,
                 "kernel_feature_mixes": [mix for _, mix in kernel_settings],
+                "local_spectral_experts": local_settings,
                 "pas_latent_dim": int(section.get("pas_latent_dim", 96)),
                 "pdp_latent_dim": int(section.get("pdp_latent_dim", 48)),
                 "gp_noise": float(section.get("gp_noise", 0.01)),
@@ -249,6 +254,24 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
                 kernel_ue[kernel_index, validation] = ue
                 kernel_power[kernel_index, validation] = power
                 kernel_uncertainty[kernel_index, validation] = uncertainty
+            for local_offset, (_, neighbors, distance_power) in enumerate(
+                local_settings, start=len(kernels)
+            ):
+                pas, pdp, ue, power, uncertainty = local_spectral_prediction(
+                    metadata["train_positions"][spectral_training],
+                    metadata["train_positions"][validation],
+                    targets["pas_log"][spectral_training],
+                    targets["pdp_log"][spectral_training],
+                    targets["ue_log_energy"][spectral_training],
+                    targets["log_power"][spectral_training],
+                    neighbors=neighbors,
+                    distance_power=distance_power,
+                )
+                kernel_pas[local_offset, validation] = pas
+                kernel_pdp[local_offset, validation] = pdp
+                kernel_ue[local_offset, validation] = ue
+                kernel_power[local_offset, validation] = power
+                kernel_uncertainty[local_offset, validation] = uncertainty
             training_labels = targets["outage"][training].astype(np.int64)
             if len(np.unique(training_labels)) >= 2:
                 classifier = OutageEnsemble(
@@ -285,9 +308,9 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
     if not np.any(valid_nonzero):
         raise RuntimeError("OOF spectral teacher produced no nonzero validation predictions")
     cell_count = int(np.max(metadata["train_cells"])) + 1
-    pas_weights = np.zeros((cell_count, len(kernels)), dtype=np.float32)
-    pdp_weights = np.zeros((cell_count, len(kernels)), dtype=np.float32)
-    auxiliary_weights_by_cell = np.zeros((cell_count, len(kernels)), dtype=np.float32)
+    pas_weights = np.zeros((cell_count, expert_count), dtype=np.float32)
+    pdp_weights = np.zeros((cell_count, expert_count), dtype=np.float32)
+    auxiliary_weights_by_cell = np.zeros((cell_count, expert_count), dtype=np.float32)
     ensemble_pas = np.zeros((len(targets["outage"]), pas_width), dtype=np.float32)
     ensemble_pdp = np.zeros((len(targets["outage"]), pdp_width), dtype=np.float32)
     ensemble_ue = np.zeros((len(targets["outage"]), ue_dim), dtype=np.float32)
@@ -322,26 +345,26 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
         )
         all_indices = np.flatnonzero(available & (metadata["train_cells"] == cell))
         ensemble_pas[all_indices] = ensemble_log_power_predictions(
-            [kernel_pas[kernel, all_indices] for kernel in range(len(kernels))],
+            [kernel_pas[kernel, all_indices] for kernel in range(expert_count)],
             pas_weights[cell],
             PAS_LOG_SCALE,
         )
         ensemble_pdp[all_indices] = ensemble_log_power_predictions(
-            [kernel_pdp[kernel, all_indices] for kernel in range(len(kernels))],
+            [kernel_pdp[kernel, all_indices] for kernel in range(expert_count)],
             pdp_weights[cell],
             PDP_LOG_SCALE,
         )
         auxiliary_weights = auxiliary_weights_by_cell[cell]
         ensemble_ue[all_indices] = ensemble_predictions(
-            [kernel_ue[kernel, all_indices] for kernel in range(len(kernels))],
+            [kernel_ue[kernel, all_indices] for kernel in range(expert_count)],
             auxiliary_weights,
         )
         ensemble_power[all_indices] = ensemble_predictions(
-            [kernel_power[kernel, all_indices, None] for kernel in range(len(kernels))],
+            [kernel_power[kernel, all_indices, None] for kernel in range(expert_count)],
             auxiliary_weights,
         )[:, 0]
         ensemble_uncertainty[all_indices] = ensemble_predictions(
-            [kernel_uncertainty[kernel, all_indices, None] for kernel in range(len(kernels))],
+            [kernel_uncertainty[kernel, all_indices, None] for kernel in range(expert_count)],
             auxiliary_weights,
         )[:, 0]
         cell_metrics.append(
@@ -436,6 +459,11 @@ def train_oof_teacher(config: dict) -> dict[str, object]:
         "stage": "spectral_teacher_oof",
         "kernels": list(kernels),
         "kernel_feature_mixes": [mix for _, mix in kernel_settings],
+        "experts": list(expert_names),
+        "local_spectral_experts": [
+            {"name": name, "neighbors": neighbors, "distance_power": distance_power}
+            for name, neighbors, distance_power in local_settings
+        ],
         "selected_samples": int(len(selected)),
         "available_predictions": int(available.sum()),
         "nonzero_predictions": int(valid_nonzero.sum()),
@@ -463,6 +491,8 @@ def train_final_teacher(config: dict) -> dict[str, object]:
     device = choose_device(str(config["runtime"].get("device", "auto")))
     kernel_settings = _kernel_settings(section)
     kernels = tuple(name for name, _ in kernel_settings)
+    local_settings = local_expert_settings(section)
+    expert_names = kernels + tuple(name for name, _, _ in local_settings)
     with np.load(section["oof_output_path"]) as source:
         pas_weights = source["pas_weights"].astype(np.float32)
         pdp_weights = source["pdp_weights"].astype(np.float32)
@@ -503,6 +533,8 @@ def train_final_teacher(config: dict) -> dict[str, object]:
     state: dict[str, object] = {
         "kernels": list(kernels),
         "kernel_feature_mixes": [mix for _, mix in kernel_settings],
+        "experts": list(expert_names),
+        "local_spectral_experts": local_settings,
         "pas_weights": pas_weights,
         "pdp_weights": pdp_weights,
         "auxiliary_weights": auxiliary_weights_by_cell,
@@ -518,6 +550,7 @@ def train_final_teacher(config: dict) -> dict[str, object]:
                 "seed": int(config["seed"]),
                 "kernels": kernels,
                 "kernel_feature_mixes": [mix for _, mix in kernel_settings],
+                "local_spectral_experts": local_settings,
                 "pas_weights": pas_weights.tolist(),
                 "pdp_weights": pdp_weights.tolist(),
                 "auxiliary_weights": auxiliary_weights_by_cell.tolist(),
@@ -589,6 +622,19 @@ def train_final_teacher(config: dict) -> dict[str, object]:
             )
             predictions.append((*decoded, uncertainty))
             gp_states.append(model.state_dict())
+        for _, neighbors, distance_power in local_settings:
+            predictions.append(
+                local_spectral_prediction(
+                    metadata["train_positions"][spectral_training],
+                    test_positions[testing],
+                    targets["pas_log"][spectral_training],
+                    targets["pdp_log"][spectral_training],
+                    targets["ue_log_energy"][spectral_training],
+                    targets["log_power"][spectral_training],
+                    neighbors=neighbors,
+                    distance_power=distance_power,
+                )
+            )
         test_pas[testing] = ensemble_log_power_predictions(
             [value[0] for value in predictions], pas_weights[cell], PAS_LOG_SCALE
         )
@@ -659,6 +705,11 @@ def train_final_teacher(config: dict) -> dict[str, object]:
         pickle.dump(state, handle, protocol=pickle.HIGHEST_PROTOCOL)
     report = {
         "stage": "spectral_teacher_final",
+        "experts": list(expert_names),
+        "local_spectral_experts": [
+            {"name": name, "neighbors": neighbors, "distance_power": distance_power}
+            for name, neighbors, distance_power in local_settings
+        ],
         "cells": cell_records,
         "test_samples": int(len(test_positions)),
         "predicted_outages": int(

@@ -8,6 +8,7 @@ import numpy as np
 
 from .config import choose_device, save_json, seed_everything
 from .gp import SharedMultiOutputGP, ensemble_log_power_predictions, ensemble_predictions
+from .local_spectral import local_expert_settings, local_spectral_prediction
 from .outage import OutageEnsemble, binary_metrics
 from .power_safety import apply_power_calibration
 from .spectral_targets import PAS_LOG_SCALE, PDP_LOG_SCALE
@@ -97,6 +98,7 @@ def build_strict_fold_prior(
 
     section = config["spectral_teacher"]
     kernel_settings = _kernel_settings(section)
+    local_settings = local_expert_settings(section)
     pas_dim = int(section.get("pas_latent_dim", 96))
     pdp_dim = int(section.get("pdp_latent_dim", 48))
     ue_dim = int(targets["ue_log_energy"].shape[1])
@@ -146,6 +148,19 @@ def build_strict_fold_prior(
                 raw, pas_compressor, pdp_compressor, pas_dim, pdp_dim, ue_dim
             )
             predictions.append((*decoded, model_uncertainty))
+        for _, neighbors, distance_power in local_settings:
+            predictions.append(
+                local_spectral_prediction(
+                    metadata["train_positions"][spectral_training],
+                    metadata["train_positions"][cell_validation],
+                    targets["pas_log"][spectral_training],
+                    targets["pdp_log"][spectral_training],
+                    targets["ue_log_energy"][spectral_training],
+                    targets["log_power"][spectral_training],
+                    neighbors=neighbors,
+                    distance_power=distance_power,
+                )
+            )
 
         pas_weights = visible_prior["pas_weights"][int(cell)].astype(np.float32)
         pdp_weights = visible_prior["pdp_weights"][int(cell)].astype(np.float32)
@@ -257,6 +272,8 @@ def build_strict_fold_prior(
         "stage": "scheme_e_v2_strict_fold_prior",
         "fold": int(fold),
         "leakage_free_validation": True,
+        "experts": [name for name, _ in kernel_settings]
+        + [name for name, _, _ in local_settings],
         "training_samples": int(len(training_indices)),
         "validation_samples": int(len(validation_indices)),
         "training_oof_pas_accuracy": float(visible_report["pas_accuracy"]),

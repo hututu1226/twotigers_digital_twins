@@ -38,6 +38,7 @@ from scheme_e.spectral_targets import channel_spectral_targets, decode_pas_log, 
 from scheme_e.splits import spatial_block_folds
 from scheme_e.hybrid_training import _build_model, _validation_mask
 from scheme_e.hybrid_model import SpectralGaussianHybrid, StructuredSpectralFieldEncoder
+from scheme_e.local_spectral import local_expert_settings, local_spectral_prediction
 
 
 def _shape() -> ChannelShape:
@@ -232,6 +233,33 @@ def test_gp_and_convex_ensemble() -> None:
     assert abs(self_consistent) < 1e-5
 
 
+def test_local_spectral_expert_blends_physical_power() -> None:
+    positions = np.asarray([[0, 0, 0], [2, 0, 0]], dtype=np.float32)
+    queries = np.asarray([[1, 0, 0]], dtype=np.float32)
+    scale_pas = 1000.0
+    scale_pdp = 1000.0
+    pas_power = np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    pdp_power = np.asarray([[2.0, 0.0], [0.0, 2.0]], dtype=np.float32)
+    pas, pdp, ue, power, uncertainty = local_spectral_prediction(
+        positions,
+        queries,
+        np.log1p(scale_pas * pas_power),
+        np.log1p(scale_pdp * pdp_power),
+        np.asarray([[1.0, 3.0], [3.0, 5.0]], dtype=np.float32),
+        np.asarray([-4.0, -2.0], dtype=np.float32),
+        neighbors=2,
+        distance_power=1.0,
+    )
+    np.testing.assert_allclose(np.expm1(pas) / scale_pas, [[0.5, 0.5]], atol=1e-6)
+    np.testing.assert_allclose(np.expm1(pdp) / scale_pdp, [[1.0, 1.0]], atol=1e-6)
+    np.testing.assert_allclose(ue, [[2.0, 4.0]], atol=1e-6)
+    np.testing.assert_allclose(power, [-3.0], atol=1e-6)
+    assert 0.0 < float(uncertainty[0]) < 1.0
+    assert local_expert_settings(
+        {"local_spectral_experts": [{"name": "idw", "neighbors": 2}]}
+    ) == [("idw", 2, 1.0)]
+
+
 def test_reference_candidates_exclude_self() -> None:
     positions = np.asarray([[0, 0, 0], [1, 0, 0], [2, 0, 0]], dtype=np.float32)
     cells = np.zeros(3, dtype=np.int64)
@@ -388,6 +416,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_gp(self) -> None:
         test_gp_and_convex_ensemble()
+
+    def test_local_spectral_expert(self) -> None:
+        test_local_spectral_expert_blends_physical_power()
 
     def test_references(self) -> None:
         test_reference_candidates_exclude_self()
