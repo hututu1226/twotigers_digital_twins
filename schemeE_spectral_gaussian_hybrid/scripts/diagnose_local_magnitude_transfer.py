@@ -216,6 +216,16 @@ def main() -> None:
     parser.add_argument(
         "--report", default="../research/scheme_e_065/L0_012_LOCAL_MAGNITUDE_TRANSFER.json"
     )
+    parser.add_argument(
+        "--extra-expert-prediction",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help=(
+            "Optional saved Fold0 prediction to include in the diagnostic oracle. "
+            "May be supplied more than once."
+        ),
+    )
     parser.add_argument("--counts", type=int, nargs="+", default=[1, 4, 8])
     parser.add_argument(
         "--strengths", type=float, nargs="+", default=[0.25, 0.5, 1.0]
@@ -360,6 +370,32 @@ def main() -> None:
         device,
         int(args.batch_size),
     )
+    extra_experts = {}
+    extra_expert_paths = {}
+    for specification in args.extra_expert_prediction:
+        if "=" not in specification:
+            raise ValueError(
+                "--extra-expert-prediction must use the NAME=PATH format"
+            )
+        name, path = specification.split("=", 1)
+        name = name.strip()
+        path = path.strip()
+        if not name or not path:
+            raise ValueError(
+                "--extra-expert-prediction must contain a non-empty name and path"
+            )
+        if name in {"v4", "local_transfer"} or name in extra_experts:
+            raise ValueError(f"Duplicate diagnostic expert name: {name}")
+        extra_experts[name] = _evaluate_saved_prediction(
+            path,
+            validation,
+            channels,
+            metadata,
+            shape,
+            device,
+            int(args.batch_size),
+        )
+        extra_expert_paths[name] = path
     strict_cells = metadata["train_cells"][validation].astype(np.int64)
     per_cell_arrays = _merge_by_cell(strict_arrays, selected_per_cell, strict_cells)
     strict_global_metrics = aggregate_sample_metrics(strict_arrays[selected_global])
@@ -373,7 +409,11 @@ def main() -> None:
         key=lambda item: float(item[1]["score"]),
     )
     oracle = target_informed_expert_oracle(
-        {"v4": v4_arrays, "local_transfer": deployable_arrays}
+        {
+            "v4": v4_arrays,
+            "local_transfer": deployable_arrays,
+            **extra_experts,
+        }
     )
     strict_gain = float(deployable_metrics["score"]) - float(v4_metrics["score"])
     oracle_gain = float(oracle["metrics"]["score"]) - float(v4_metrics["score"])
@@ -410,6 +450,7 @@ def main() -> None:
             "strict_prediction": "Fold0 validation uses Fold0-train support only",
             "fold0_target": "evaluation and target-informed oracle only",
         },
+        "extra_expert_predictions": extra_expert_paths,
         "distance_summary": {
             "inner_nearest_mean": float(inner_distances[:, 0].mean()),
             "inner_nearest_p90": float(np.quantile(inner_distances[:, 0], 0.9)),
