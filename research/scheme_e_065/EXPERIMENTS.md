@@ -23,6 +23,7 @@
 | L0-012 | 邻近观测点的完整 Teacher 幅度误差是否可直接迁移到查询点。 | 同 BS 最近 1/4/8 个点的 target-minus-OOF-teacher log-power 残差；只在 inner split 选固定强度。 | 直接候选退化，但与 V4 的二专家 oracle 提升 0.019597。 | 0.615896 | 0.555455 | 0.764117 | 1.270997 | -0.011193 | KEEP_AS_EXPERT | 0.028 h |
 | L2-001 | 已提升的 adaptive Teacher 需要重新适配 Hybrid 才能把粗谱收益传到最终信道。 | V4 架构和 AE 不变；以 V4 best 初始化，只替换 leakage-safe adaptive OOF priors 并低学习率微调。 | best epoch1，之后验证持续下降。 | 0.621198 | 0.560096 | 0.754747 | 1.099510 | -0.005891 | DROP | 0.209 h |
 | L0-013 | Teacher profile 对齐能否修复 L0-012 未对齐迁移造成的 PAS 损失。 | 仅增加由 query/neighbor Teacher 估计的离散角度/时延 circular shift；固定 k8、strength0.25。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
+| L1-006 | query-conditioned local set 能否逐位置选择可迁移的 full-resolution magnitude residual。 | K=4 同 BS residual；共享 3D encoder；逐 voxel attention；零初始化 bounded correction。 | best epoch0；所有非零修正明显更差。 | inner 0.598744 | 0.586458 | 0.718097 | 1.600037 | +0.000000 | DROP | 0.141 h |
 
 ## L0 结论
 
@@ -503,3 +504,29 @@ L0-014 已改变相位对齐和 NMSE，因此必须重新计算新基线的单�
 ### Abort Rule
 
 inner 最佳为 epoch0、增益低于 `0.004`，或 PDP 明显下降时立即 DROP，不进入 strict Fold0。
+
+### Result
+
+内部基线为 PAS=`0.586458`、PDP=`0.718097`、NMSE=`1.600037`、Score=`0.598744`。epoch1/2 已降至 `0.571678/0.571936`，之后始终未恢复；epoch14 早停，best epoch=`0`、净增=`0.000000`。模型在 epoch0 的有效邻点数约为 `3.99`，因此失败不是 attention 先塌成单邻点。总耗时 `505.90` 秒，未进入 strict Fold0。
+
+### Interpretation
+
+网络能够降低 full-resolution log-power 训练损失，但学到的残差无法跨空间洞迁移，且与最终 PAS/PDP/NMSE 方向相反。将局部集合、完整分辨率和可学习门控同时加入后仍失败，说明继续扩大该模型或扫描 K、宽度、学习率没有证据支持。
+
+### Decision
+
+`DROP`。关闭 query-conditioned local-set full-resolution magnitude predictor；只保留一次固定组合诊断，检查此前 local magnitude 候选是否只是被较差的 Teacher 相位拖累。
+
+## L0-022
+
+### Hypothesis
+
+L0-012/L0-013 的局部幅度残差可能有部分可用信息，但候选使用 Teacher seed 相位，整体分数被相位与 NMSE 拖累。把固定的 aligned `k8, strength=0.25` 幅度修正叠加到 L0-014 quality-gated V4 的幅度上，并完整保留 V4 相位，可能得到真正互补的候选。
+
+### Minimal Experiment
+
+不训练、不扫参数。邻点、残差和对齐全部只用 Fold0-train 与 OOF Teacher；Fold0 quality-gated V4 提供目标位置的部署基线相位和幅度。固定叠加 inner 已选出的 `k=8, strength=0.25` 幅度残差，再统一评估直接候选及其与 V4 的 target-informed 二专家 oracle。
+
+### Promotion Rule
+
+直接候选至少增加 `0.003`，或二专家诊断 oracle 达到 `0.66`；否则立即 DROP，不训练 gate，也不扫描修正强度。

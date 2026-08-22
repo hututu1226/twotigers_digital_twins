@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: local_set_fullres_magnitude_design
+status: quality_gated_magnitude_transfer_design
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -15,10 +15,10 @@ best_artifact_paths:
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
   prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  A query-conditioned local set encoder can learn when and where to transfer
-  full-resolution angle-delay magnitude residuals, unlike the failed query-only
-  CNN and fixed neighbor residual transfer.
-current_experiment: L1-006
+  The fixed aligned local magnitude residual may be useful when applied only as
+  an incremental magnitude correction to the quality-gated V4 channel while
+  preserving V4 carrier phase.
+current_experiment: L0-022
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -47,6 +47,7 @@ completed_experiments:
   - L0-019_quality_gated_scale_oracles
   - L0-020_angle_delay_component_oracles
   - L0-021_observed_phase_transport_probe
+  - L1-006_query_conditioned_local_set_fullres_magnitude_probe
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -63,17 +64,18 @@ dropped_families:
   - quality_gated_transport_count
   - scalar_power_or_complex_scale_calibration_after_quality_gate
   - observed_neighbor_phase_transport
+  - query_conditioned_local_set_fullres_magnitude
 pending_queue:
-  - L1-006_query_conditioned_local_set_fullres_magnitude_probe
+  - L0-022_quality_gated_aligned_magnitude_transfer
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.665
+gpu_hours_used: 0.806
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
-  Implement and test scripts/train_local_set_magnitude_refiner.py, then run its
-  inner spatial probe before any strict Fold0 evaluation.
-git_commit: 62f3be7
-last_update_time: 2026-08-22T20:25:00+08:00
+  Implement and run one fixed L0-022 composition: aligned k8 strength0.25
+  magnitude residual on top of quality-gated V4 magnitude and phase.
+git_commit: 41cac80
+last_update_time: 2026-08-22T20:53:10+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -119,3 +121,6 @@ notes:
   - Earlier magnitude predictors already failed spatial transfer, so L0-021 tests observed pathwise phase before another magnitude model.
   - L0-021 nearest and coherent neighbor phase scored 0.626903 and 0.628798, both below baseline.
   - L0-021 ten-expert target-informed oracle reached only 0.646909, so observed phase transport is dropped.
+  - L1-006 inner baseline was 0.598744; every trained epoch was worse and early stopping selected epoch0.
+  - L1-006 retained about 3.99 effective neighbors at epoch0, so its failure was not attention collapse.
+  - L1-006 used 505.90 seconds and did not pass the fixed +0.004 inner gate; strict Fold0 was not run.
