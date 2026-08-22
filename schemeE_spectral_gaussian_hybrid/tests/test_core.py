@@ -47,6 +47,7 @@ from scheme_e.hybrid_training import (
 )
 from scheme_e.hybrid_model import SpectralGaussianHybrid, StructuredSpectralFieldEncoder
 from scheme_e.local_spectral import local_expert_settings, local_spectral_prediction
+from scheme_e.neural_spectral_refiner import SpectralNeighborRefiner
 
 
 def _shape() -> ChannelShape:
@@ -460,6 +461,28 @@ def test_v3_transport_selection_respects_guard_distance() -> None:
     assert np.all(selected_distances >= np.asarray([[3.0], [5.0]]))
 
 
+def test_v7_neural_teacher_preserves_full_latent_width() -> None:
+    model = SpectralNeighborRefiner(
+        latent_dim=12,
+        pas_dim=8,
+        query_feature_dim=5,
+        neighbor_feature_dim=7,
+        width=32,
+        layers=2,
+        heads=4,
+        dropout=0.0,
+    )
+    output = model(
+        torch.randn(3, 12),
+        torch.randn(3, 5),
+        torch.randn(3, 4, 12),
+        torch.randn(3, 4, 7),
+    )
+    assert output["latent"].shape == (3, 12)
+    assert output["residual"].shape == (3, 12)
+    assert torch.isfinite(output["latent"]).all()
+
+
 class SchemeECoreTests(unittest.TestCase):
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()
@@ -508,6 +531,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_v3_transport_selection(self) -> None:
         test_v3_transport_selection_respects_guard_distance()
+
+    def test_v7_neural_teacher(self) -> None:
+        test_v7_neural_teacher_preserves_full_latent_width()
 
     def test_final_projection_override_is_declared(self) -> None:
         import inspect
