@@ -196,6 +196,108 @@ def scale_oracle_predictions(
     }
 
 
+def hard_zero_metric_arrays(
+    values: Mapping[str, np.ndarray], mask: np.ndarray
+) -> dict[str, np.ndarray]:
+    selected = np.asarray(mask, dtype=bool)
+    output = {name: np.array(value, copy=True) for name, value in values.items()}
+    if len(selected) != len(output["target_energy"]):
+        raise ValueError("Hard-zero mask and metric sample counts differ")
+    output["pas_sum"][selected] = 0.0
+    output["pdp_sum"][selected] = 0.0
+    output["error_energy"][selected] = output["target_energy"][selected]
+    output["prediction_energy"][selected] = 0.0
+    output["cross_real"][selected] = 0.0
+    output["cross_imag"][selected] = 0.0
+    output["prediction_log_power"][selected] = 0.0
+    output["pas"][selected] = 0.0
+    output["pdp"][selected] = 0.0
+    output["sample_nmse"][selected] = np.where(
+        output["target_energy"][selected] > 1e-30, 1.0, 0.0
+    )
+    output["sample_score"][selected] = np.where(
+        output["target_energy"][selected] > 1e-30, 0.1, 0.2
+    )
+    return output
+
+
+def outage_threshold_oracle(
+    values: Mapping[str, np.ndarray],
+    outage_probability: np.ndarray,
+    true_outage: np.ndarray,
+    cell_ids: np.ndarray,
+    *,
+    threshold_steps: int = 50,
+) -> dict[str, object]:
+    probability = np.asarray(outage_probability, dtype=np.float64)
+    target = np.asarray(true_outage, dtype=bool)
+    cells = np.asarray(cell_ids, dtype=np.int64)
+    if not (len(probability) == len(target) == len(cells)):
+        raise ValueError("Outage diagnostic arrays have different lengths")
+    thresholds = np.concatenate(
+        [np.linspace(0.0, 1.0, int(threshold_steps) + 1), np.asarray([1.000001])]
+    )
+
+    def evaluate(mask: np.ndarray) -> dict[str, float | int]:
+        return aggregate_sample_metrics(hard_zero_metric_arrays(values, mask))
+
+    global_candidates = [
+        (float(threshold), evaluate(probability >= threshold))
+        for threshold in thresholds
+    ]
+    global_threshold, global_metrics = max(
+        global_candidates, key=lambda item: float(item[1]["score"])
+    )
+
+    unique_cells = np.unique(cells)
+    best_cell_thresholds = {str(int(cell)): 1.000001 for cell in unique_cells}
+    best_cell_metrics = evaluate(np.zeros(len(target), dtype=bool))
+    if len(unique_cells) == 2:
+        first, second = (int(value) for value in unique_cells)
+        for first_threshold in thresholds:
+            first_mask = (cells == first) & (probability >= first_threshold)
+            for second_threshold in thresholds:
+                mask = first_mask | (
+                    (cells == second) & (probability >= second_threshold)
+                )
+                metrics = evaluate(mask)
+                if float(metrics["score"]) > float(best_cell_metrics["score"]):
+                    best_cell_metrics = metrics
+                    best_cell_thresholds = {
+                        str(first): float(first_threshold),
+                        str(second): float(second_threshold),
+                    }
+
+    positives = int(target.sum())
+    negatives = int((~target).sum())
+    auc = float("nan")
+    if positives and negatives:
+        order = np.argsort(probability, kind="mergesort")
+        ranks = np.empty(len(order), dtype=np.float64)
+        ranks[order] = np.arange(1, len(order) + 1, dtype=np.float64)
+        _, inverse, counts = np.unique(
+            probability, return_inverse=True, return_counts=True
+        )
+        rank_sums = np.bincount(inverse, weights=ranks)
+        ranks = (rank_sums / counts)[inverse]
+        auc = float(
+            (ranks[target].sum() - positives * (positives + 1) / 2)
+            / (positives * negatives)
+        )
+
+    return {
+        "diagnostic_only": True,
+        "true_outage_count": positives,
+        "nonoutage_count": negatives,
+        "probability_auc": auc,
+        "perfect_label_metrics": evaluate(target),
+        "best_global_hard_threshold": global_threshold,
+        "best_global_hard_metrics": global_metrics,
+        "best_per_cell_hard_thresholds": best_cell_thresholds,
+        "best_per_cell_hard_metrics": best_cell_metrics,
+    }
+
+
 def target_informed_expert_oracle(
     experts: Mapping[str, Mapping[str, np.ndarray]],
     *,

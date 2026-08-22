@@ -22,6 +22,7 @@ from scheme_e.gp import (
 from scheme_e.diagnostics import (
     aggregate_sample_metrics,
     concatenate_metric_batches,
+    outage_threshold_oracle,
     sample_metric_batch,
     scale_oracle_predictions,
     target_informed_expert_oracle,
@@ -142,6 +143,27 @@ def test_target_informed_oracle_selects_complementary_experts() -> None:
     oracle = target_informed_expert_oracle(experts)
     assert float(oracle["metrics"]["score"]) > 0.99999
     assert oracle["selection_counts"] == {"first": 2, "second": 2}
+
+
+def test_outage_oracle_recovers_false_negative_energy() -> None:
+    shape = ChannelShape(m=2, m_h=1, m_v=1, m_p=2, n=1, s=3)
+    target = torch.ones(3, 2, 1, 3, dtype=torch.complex64)
+    target[0] = 0.0
+    prediction = target.clone()
+    prediction[0] = 2.0
+    batch = sample_metric_batch(
+        prediction, target, shape, torch.tensor([True, False, False])
+    ).as_dict()
+    result = outage_threshold_oracle(
+        batch,
+        np.asarray([0.9, 0.1, 0.1]),
+        np.asarray([True, False, False]),
+        np.asarray([0, 0, 1]),
+        threshold_steps=10,
+    )
+    assert abs(float(result["perfect_label_metrics"]["nmse"])) < 1e-8
+    assert abs(float(result["perfect_label_metrics"]["score"]) - 1.0) < 1e-6
+    assert abs(float(result["best_global_hard_metrics"]["score"]) - 1.0) < 1e-6
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -560,6 +582,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_diagnostic_expert_oracle(self) -> None:
         test_target_informed_oracle_selects_complementary_experts()
+
+    def test_diagnostic_outage_oracle(self) -> None:
+        test_outage_oracle_recovers_false_negative_energy()
 
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()

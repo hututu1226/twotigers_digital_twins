@@ -20,6 +20,7 @@ from scheme_e.config import choose_device, load_config, save_json
 from scheme_e.diagnostics import (
     aggregate_sample_metrics,
     concatenate_metric_batches,
+    outage_threshold_oracle,
     sample_metric_batch,
     scale_oracle_predictions,
     target_informed_expert_oracle,
@@ -623,6 +624,10 @@ official Scheme E score remains `0.59`.
             f"PAS `{om['pas']:.6f}`, PDP `{om['pdp']:.6f}`, NMSE `{om['nmse']:.6f}`, "
             f"Score `{om['score']:.6f}` with counts `{oracle['selection_counts']}`."
         )
+    outage = result["outage_oracle"]
+    perfect_outage = outage["perfect_label_metrics"]
+    global_outage = outage["best_global_hard_metrics"]
+    cell_outage = outage["best_per_cell_hard_metrics"]
     bridge_md = f"""# Metric Bridge Audit
 
 ## Metric Definition
@@ -664,6 +669,13 @@ are useful diagnostics but are not interchangeable with final channel PAS/PDP.
 ## Existing Expert Oracle
 
 {oracle_text}
+
+## Outage Counterfactuals
+
+- DIAGNOSTIC ONLY - NOT DEPLOYABLE: perfect outage labels produce Score `{perfect_outage['score']:.6f}` and NMSE `{perfect_outage['nmse']:.6f}`.
+- Existing probability, best global hard threshold `{outage['best_global_hard_threshold']:.6f}`: Score `{global_outage['score']:.6f}`.
+- Existing probability, target-informed per-BS thresholds `{outage['best_per_cell_hard_thresholds']}`: Score `{cell_outage['score']:.6f}`.
+- Outage probability ROC AUC: `{outage['probability_auc']:.6f}`.
 """
     (output_dir / "METRIC_BRIDGE_AUDIT.md").write_text(bridge_md, encoding="utf-8")
 
@@ -706,6 +718,7 @@ are useful diagnostics but are not interchangeable with final channel PAS/PDP.
     top1 = max(1, int(np.ceil(0.01 * len(ordering))))
     top5 = max(1, int(np.ceil(0.05 * len(ordering))))
     total_error = max(float(final["error_energy"].sum()), 1e-30)
+    outage_error_fraction = float(final["error_energy"][~nonoutage].sum()) / total_error
     mining_md = f"""# Fold0 Error Mining
 
 ## Main Slices
@@ -725,6 +738,14 @@ are useful diagnostics but are not interchangeable with final channel PAS/PDP.
 
 - Worst 1% of samples contribute `{final['error_energy'][ordering[:top1]].sum() / total_error:.2%}` of total error energy.
 - Worst 5% of samples contribute `{final['error_energy'][ordering[:top5]].sum() / total_error:.2%}` of total error energy.
+- True outage samples contribute `{outage_error_fraction:.2%}` of total error energy.
+
+## Outage Diagnosis
+
+- True outages: `{result['outage_oracle']['true_outage_count']}`.
+- Baseline predicted outages: `{baseline['predicted_outages']}`.
+- Perfect-label hard-zero Score: `{result['outage_oracle']['perfect_label_metrics']['score']:.6f}` (diagnostic only).
+- Best hard threshold using the current probability has a target-informed per-BS Score ceiling of `{result['outage_oracle']['best_per_cell_hard_metrics']['score']:.6f}`. Those thresholds use Fold0 targets and cannot be submitted directly.
 
 ## Interpretation Rule
 
@@ -891,6 +912,12 @@ def main() -> None:
     per_sample.update(
         {f"final_{name}": np.asarray(value) for name, value in base_final.items()}
     )
+    outage_oracle = outage_threshold_oracle(
+        base_final,
+        per_sample["outage_probability"],
+        per_sample["true_outage"],
+        per_sample["cell_id"],
+    )
     for stage in ("teacher_projected_seed", "hybrid_raw", "hybrid_post_projection"):
         values = variants["base"]["arrays"][stage]
         for field in ("pas", "pdp", "sample_nmse", "sample_score", "prediction_log_power"):
@@ -949,6 +976,7 @@ def main() -> None:
         },
         "variants": serializable_variants,
         "saved_roundtrip": saved,
+        "outage_oracle": outage_oracle,
         "expert_oracle": oracle,
         "elapsed_seconds": time.perf_counter() - started,
     }
