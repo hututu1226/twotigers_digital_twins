@@ -118,6 +118,12 @@ def _latent_memmaps(
             dtype=np.float32,
             shape=(count,),
         ),
+        "outage": np.lib.format.open_memmap(
+            output_dir / f"{prefix}_outage.npy",
+            mode="w+",
+            dtype=np.bool_,
+            shape=(count,),
+        ),
     }
 
 
@@ -137,7 +143,7 @@ def _encode_targets(
         channel = torch.as_tensor(
             np.array(channels[batch_indices], copy=True), device=device
         )
-        target_shape, log_power, _ = channel_to_shape_target(channel, shape)
+        target_shape, log_power, outage = channel_to_shape_target(channel, shape)
         with torch.autocast(
             device_type=device.type,
             dtype=torch.float16,
@@ -149,6 +155,7 @@ def _encode_targets(
         )
         cache["detail"][batch_indices] = detail.float().cpu().numpy().astype(np.float16)
         cache["log_power"][batch_indices] = log_power.float().cpu().numpy()
+        cache["outage"][batch_indices] = outage.cpu().numpy()
         if start % max(batch_size * 32, 1) == 0:
             print(f"target latent {min(start + batch_size, len(indices))}/{len(indices)}", flush=True)
     for value in cache.values():
@@ -217,7 +224,7 @@ def _encode_teacher_seed(
             minimum_scale=model.projection_minimum_scale,
             maximum_scale=model.projection_maximum_scale,
         )
-        projected_shape, log_power, _ = channel_to_shape_target(projected, shape)
+        projected_shape, log_power, outage = channel_to_shape_target(projected, shape)
         with torch.autocast(
             device_type=device.type,
             dtype=torch.float16,
@@ -227,6 +234,7 @@ def _encode_teacher_seed(
         cache["spectrum"][indices] = spectrum.float().cpu().numpy().astype(np.float16)
         cache["detail"][indices] = detail.float().cpu().numpy().astype(np.float16)
         cache["log_power"][indices] = log_power.float().cpu().numpy()
+        cache["outage"][indices] = outage.cpu().numpy()
         if start % max(batch_size * 32, 1) == 0:
             print(
                 f"teacher seed latent {min(start + batch_size, len(target_indices))}/{len(target_indices)}",
@@ -249,7 +257,7 @@ def _encode_prediction(
     for start in range(0, len(rows), batch_size):
         local = rows[start : start + batch_size]
         channel = torch.as_tensor(np.array(prediction[local], copy=True), device=device)
-        target_shape, log_power, _ = channel_to_shape_target(channel, shape)
+        target_shape, log_power, outage = channel_to_shape_target(channel, shape)
         with torch.autocast(
             device_type=device.type,
             dtype=torch.float16,
@@ -259,6 +267,7 @@ def _encode_prediction(
         cache["spectrum"][local] = spectrum.float().cpu().numpy().astype(np.float16)
         cache["detail"][local] = detail.float().cpu().numpy().astype(np.float16)
         cache["log_power"][local] = log_power.float().cpu().numpy()
+        cache["outage"][local] = outage.cpu().numpy()
     for value in cache.values():
         value.flush()
 
@@ -425,6 +434,7 @@ def _evaluate_oracle(
             decoded.float(),
             torch.as_tensor(candidate["log_power"][rows], device=device),
             shape,
+            torch.as_tensor(candidate["outage"][rows], device=device),
         )
         target_channel = torch.as_tensor(
             np.array(channels[global_indices], copy=True), device=device
