@@ -40,6 +40,11 @@ from scheme_e.diagnostics import (
     scale_oracle_predictions,
     target_informed_expert_oracle,
 )
+from scheme_e.distribution_audit import (
+    fixed_bin_importance_weights,
+    same_cell_support_features,
+    weighted_aggregate_sample_metrics,
+)
 from scheme_e.metrics import ChannelMetricAccumulator
 from scheme_e.magnitude_refiner import (
     FullResolutionMagnitudeRefiner,
@@ -863,6 +868,62 @@ def test_v7_neural_teacher_preserves_full_latent_width() -> None:
     assert torch.isfinite(output["latent"]).all()
 
 
+def test_distribution_audit_support_features_never_cross_cells() -> None:
+    support_positions = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+            [102.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    query_positions = np.asarray(
+        [[1.0, 0.0, 0.0], [101.0, 0.0, 0.0]], dtype=np.float32
+    )
+    features, names = same_cell_support_features(
+        support_positions,
+        np.asarray([0, 0, 1, 1]),
+        query_positions,
+        np.asarray([0, 1]),
+    )
+    assert names[0] == "nearest_m"
+    np.testing.assert_allclose(features[:, 0], [1.0, 1.0])
+    np.testing.assert_allclose(features[:, names.index("density_6m")], [2.0, 2.0])
+
+
+def test_distribution_audit_importance_weights_match_target_bins() -> None:
+    reference_cells = np.asarray([0, 0, 1, 1])
+    reference_distance = np.asarray([1.0, 5.0, 1.0, 5.0])
+    target_cells = np.asarray([0, 0, 0, 1, 1, 1])
+    target_distance = np.asarray([1.0, 1.0, 5.0, 1.0, 5.0, 5.0])
+    weights, report = fixed_bin_importance_weights(
+        reference_cells,
+        reference_distance,
+        target_cells,
+        target_distance,
+    )
+    assert report["unmatched_target_samples"] == 0
+    assert abs(float(weights.sum()) - 4.0) < 1e-12
+    assert weights[0] > weights[1]
+    assert weights[3] > weights[2]
+
+
+def test_distribution_audit_uniform_weighted_metrics_match_canonical() -> None:
+    arrays = {
+        "pas_sum": np.asarray([2.0, 1.0]),
+        "pas_count": np.asarray([2, 2]),
+        "pdp_sum": np.asarray([3.0, 1.0]),
+        "pdp_count": np.asarray([4, 4]),
+        "error_energy": np.asarray([1.0, 3.0]),
+        "target_energy": np.asarray([2.0, 6.0]),
+    }
+    canonical = aggregate_sample_metrics(arrays)
+    weighted = weighted_aggregate_sample_metrics(arrays, np.ones(2))
+    for name in ("pas", "pdp", "nmse", "score"):
+        assert abs(float(canonical[name]) - float(weighted[name])) < 1e-12
+
+
 class SchemeECoreTests(unittest.TestCase):
     def test_carrier_quality_gate(self) -> None:
         test_carrier_quality_gate_keeps_reliable_fit_and_replaces_weak_fit()
@@ -982,6 +1043,15 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_v7_neural_teacher(self) -> None:
         test_v7_neural_teacher_preserves_full_latent_width()
+
+    def test_distribution_support_features(self) -> None:
+        test_distribution_audit_support_features_never_cross_cells()
+
+    def test_distribution_importance_weights(self) -> None:
+        test_distribution_audit_importance_weights_match_target_bins()
+
+    def test_distribution_weighted_metrics(self) -> None:
+        test_distribution_audit_uniform_weighted_metrics_match_canonical()
 
     def test_final_projection_override_is_declared(self) -> None:
         import inspect

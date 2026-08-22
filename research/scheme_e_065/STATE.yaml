@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: quality_gated_magnitude_transfer_design
+status: test_geometry_shift_audit_design
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -15,10 +15,9 @@ best_artifact_paths:
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
   prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  The fixed aligned local magnitude residual may be useful when applied only as
-  an incremental magnitude correction to the quality-gated V4 channel while
-  preserving V4 carrier phase.
-current_experiment: L0-022
+  The offline/online score reversal may be explained by observable geometry
+  shift between the old validation holes, strict Fold0, and the 500 test points.
+current_experiment: L0-023
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -48,6 +47,7 @@ completed_experiments:
   - L0-020_angle_delay_component_oracles
   - L0-021_observed_phase_transport_probe
   - L1-006_query_conditioned_local_set_fullres_magnitude_probe
+  - L0-022_quality_gated_aligned_magnitude_transfer
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -65,17 +65,18 @@ dropped_families:
   - scalar_power_or_complex_scale_calibration_after_quality_gate
   - observed_neighbor_phase_transport
   - query_conditioned_local_set_fullres_magnitude
+  - quality_gated_aligned_magnitude_as_primary_route
 pending_queue:
-  - L0-022_quality_gated_aligned_magnitude_transfer
+  - L0-023_test_geometry_shift_audit
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.806
+gpu_hours_used: 0.817
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
-  Implement and run one fixed L0-022 composition: aligned k8 strength0.25
-  magnitude residual on top of quality-gated V4 magnitude and phase.
-git_commit: 41cac80
-last_update_time: 2026-08-22T20:53:10+08:00
+  Run a CPU-only L0-023 audit of support distance, local density, 71D geometry
+  shift, domain-classifier AUC, and test-geometry-reweighted Fold0 metrics.
+git_commit: a89ca13
+last_update_time: 2026-08-22T21:05:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -124,3 +125,7 @@ notes:
   - L1-006 inner baseline was 0.598744; every trained epoch was worse and early stopping selected epoch0.
   - L1-006 retained about 3.99 effective neighbors at epoch0, so its failure was not attention collapse.
   - L1-006 used 505.90 seconds and did not pass the fixed +0.004 inner gate; strict Fold0 was not run.
+  - L0-022 preserved V4 phase and added only the fixed aligned local magnitude correction.
+  - L0-022 strict Score was 0.633628 (+0.002047); PAS, PDP, and NMSE all improved slightly.
+  - L0-022 missed the fixed +0.003 direct gate and its two-expert oracle was only 0.640268.
+  - L0-022 is retained only as a minor diagnostic artifact; the protocol-authoritative baseline remains 0.631581.

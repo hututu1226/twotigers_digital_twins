@@ -4,8 +4,8 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | aligned local magnitude 的失败主要来自 Teacher seed 相位；只把其幅度残差叠加到 quality-gated V4 可形成互补候选。 | L0-020 target-magnitude + V4 phase oracle=`0.822616`；L0-013 候选此前同时携带较差 Teacher 相位；这个固定组合尚未测试。 | 直接 strict Score `+0.003`，重点提高 PAS 且保留 V4 NMSE。 | 若直接候选不升，二专家 oracle 必须达到 `0.66` 才有 gate 价值。 | 固定 aligned `k8, strength0.25`，只将 log-power correction 加到 V4 angle-delay magnitude，完整保留 V4 phase。 | <=0.05 h | 直接候选不升且二专家 oracle `<0.66`。 | 直接提升则固化；只在 oracle 过线时做一次 OOF gate。 |
-| 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量；L0-017 三专家 oracle 为 `0.651713`。 | `+0.003` 到 `+0.010`。 | 新候选需把 oracle 推到 `>0.66`。 | 新候选产生后先算联合 oracle。 | <=0.2 h | oracle `<0.66`。 | 只有过线后才允许严格 OOF gate。 |
+| 1 | Scheme1 `0.3925` 离线但官方 `0.62`，Scheme E 严格 Fold0 `0.6316` 但旧线上仅 `0.59`，可能存在验证空洞与真实测试几何难度不匹配。 | 测试位置和 Fold0 都可在不使用测试信道标签的前提下计算同基站支撑距离、密度和 71D 几何；当前只看了总体距离摘要。 | 解释线上/离线反转，并确定严格 Fold0 是否应继续作为唯一决策门槛。 | 不适用；这是分布诊断，不产生可部署分数。 | 固定比较旧 Scheme1 验证、strict Fold0 和 test 的距离/密度/几何分布；用域分类 AUC 量化可分性，并按 test 几何重加权 Fold0 指标。 | CPU, <=0.05 h | test 与 strict Fold0 高度一致且重加权结论不变。 | 若明显偏移，重建 test-matched 多 Fold；否则关闭“验证集不匹配”解释。 |
+| 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量；L0-022 二专家 oracle 仅 `0.640268`。 | `+0.003` 到 `+0.010`。 | 新候选需把 oracle 推到 `>0.66`。 | 新候选产生后先算联合 oracle。 | <=0.2 h | oracle `<0.66`。 | 只有过线后才允许严格 OOF gate。 |
 
 ## 已 DROP
 
@@ -25,6 +25,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 - quality-gated scale calibration：complex-scale oracle 仅 `0.644092`，不足以达到目标。
 - observed neighbor phase transport：最近邻/相干融合均下降，十专家 oracle 仅 `0.646909`。
 - query-conditioned local-set full-resolution magnitude：inner best epoch0、增益 `0.000000`；所有非零修正显著下降。
+- quality-gated aligned magnitude composition：strict `0.633628`，虽有 `+0.002047` 真增益，但低于固定 `+0.003` 门槛；二专家 oracle 仅 `0.640268`。候选文件保留用于诊断，不作为主路线。
 - AE Detail latent residual：即使 rank128 target-informed oracle 也只有 `0.631194`。
 - 邻居权重、投影轮数、少量 loss 权重和无证据扩容的连续扫描。
 
