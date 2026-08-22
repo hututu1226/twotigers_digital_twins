@@ -425,3 +425,29 @@ L0-014 已改变相位对齐和 NMSE，因此必须重新计算新基线的单�
 ### Expected Signal
 
 至少一个尺度 oracle 达到 `0.65`，否则尺度校准继续保持 DROP。
+
+### Result
+
+新基线复现 Score=`0.631581`。real-scale oracle=`0.444200`，power-scale oracle=`0.607012`，最强的 complex-scale oracle 为 PAS=`0.570384`、PDP=`0.759130`、NMSE=`0.781157`、Score=`0.644092`，净增 `+0.012511`。耗时 `2.42` 秒。
+
+### Interpretation
+
+逐样本统一复数标量能改善一部分 NMSE，但即使使用 Fold0 target 求最优标量也达不到 `0.65`。剩余误差不是一个统一幅度或统一相位能解释的。
+
+### Decision
+
+`DROP`。不训练尺度校准网络。
+
+## L0-020
+
+### Hypothesis
+
+剩余误差来自 angle-delay 幅度和逐路径相位中的一个主分量；分别替换真值幅度或真值相位可以确定下一套神经模块应预测什么。
+
+### Minimal Experiment
+
+保留 quality-gated prediction。分别构造“预测幅度+真值逐 bin 相位”和“真值幅度+预测逐 bin 相位”，逆变换回完整复数信道并统一评估。
+
+### Expected Signal
+
+至少一个分支的诊断上限明显超过 `0.67`，否则不值得继续做单分量模型。

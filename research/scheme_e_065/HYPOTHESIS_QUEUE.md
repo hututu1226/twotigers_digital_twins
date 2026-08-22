@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | 新 quality-gated 基线的剩余 NMSE 仍可能主要来自可校准的单样本尺度。 | L0-014 将 NMSE 从 `1.063711` 降到 `1.004499`，旧基线的尺度 oracle 已不再代表当前误差结构。 | 若 oracle `>=0.65`，再研究只用 OOF 特征的轻量尺度模型。 | 直接计算 real/complex/power 三种诊断上限。 | 对已保存的新基线 prediction 做一次 canonical scale oracle，不训练。 | <=0.05 h | 所有 oracle `<0.65`。 | 只有过线后才建立 OOF 校准 probe。 |
+| 1 | 剩余误差主要集中在 angle-delay 幅度或逐路径相位中的一个分量。 | L0-019 最强复数标量 oracle 仅 `0.644092`，说明单一全局相位/幅度不够，必须检查逐 bin 结构。 | 识别一个 oracle `>0.67` 的可建模分支。 | 分别替换 target magnitude 和 target phase。 | 对保存的新基线做两种 component swap oracle，不训练。 | <=0.05 h | 两个 oracle 均 `<0.65`。 | 选择上限更高且空间可预测性更强的分支做最小 neural probe。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量；L0-017 三专家 oracle 为 `0.651713`。 | `+0.003` 到 `+0.010`。 | 新候选需把 oracle 推到 `>0.66`。 | 新候选产生后先算联合 oracle。 | <=0.2 h | oracle `<0.66`。 | 只有过线后才允许严格 OOF gate。 |
 
 ## 已 DROP
@@ -22,6 +22,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 - Round1 H/V marginal projection：strict `0.613227`；与 quality-gated V4 的二专家 oracle 仅 `0.637756`。
 - 现有三专家 Router：联合 oracle `0.651713`，仍低于预先固定的 `0.66` Router 门槛。
 - quality-gated transport count：BS1 count 8→1 仅提升 `0.001869`，低于 `0.003` 门槛。
+- quality-gated scale calibration：complex-scale oracle 仅 `0.644092`，不足以达到目标。
 - AE Detail latent residual：即使 rank128 target-informed oracle 也只有 `0.631194`。
 - 邻居权重、投影轮数、少量 loss 权重和无证据扩容的连续扫描。
 
