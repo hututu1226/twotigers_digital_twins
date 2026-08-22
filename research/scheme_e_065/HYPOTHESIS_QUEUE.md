@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | 剩余误差主要集中在 angle-delay 幅度或逐路径相位中的一个分量。 | L0-019 最强复数标量 oracle 仅 `0.644092`，说明单一全局相位/幅度不够，必须检查逐 bin 结构。 | 识别一个 oracle `>0.67` 的可建模分支。 | 分别替换 target magnitude 和 target phase。 | 对保存的新基线做两种 component swap oracle，不训练。 | <=0.05 h | 两个 oracle 均 `<0.65`。 | 选择上限更高且空间可预测性更强的分支做最小 neural probe。 |
+| 1 | 载波对齐后的观测邻点能提供目标逐路径相位，而不必从坐标凭空生成。 | L0-020 真值逐 bin 相位 oracle=`0.666379`；统一 complex scale 仅 `0.644092`，说明需要 pathwise phase。 | 最近邻或相干融合直接增益 `>=0.003`，或 K 相位专家 oracle `>=0.655`。 | 固定当前 transport K=8，计算邻点 phase 候选与诊断 oracle。 | 只替换新基线 angle-delay phase，幅度完全保留。 | <=0.1 h | 直接候选增益 `<0.003` 且 oracle `<0.655`。 | 成立后训练 query-conditioned per-bin phase attention。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量；L0-017 三专家 oracle 为 `0.651713`。 | `+0.003` 到 `+0.010`。 | 新候选需把 oracle 推到 `>0.66`。 | 新候选产生后先算联合 oracle。 | <=0.2 h | oracle `<0.66`。 | 只有过线后才允许严格 OOF gate。 |
 
 ## 已 DROP

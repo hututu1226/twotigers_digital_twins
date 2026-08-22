@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: angle_delay_component_oracle_ready
+status: observed_phase_transport_probe_ready
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -15,10 +15,10 @@ best_artifact_paths:
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
   prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  The remaining quality-gated baseline error must be separated into
-  angle-delay magnitude error and pathwise phase error before a new neural
-  correction module is selected.
-current_experiment: L0-020
+  Carrier-aligned phases from observed same-cell neighbors may contain enough
+  pathwise information to recover a useful fraction of the 0.666379 target-phase
+  ceiling without predicting phase from coordinates alone.
+current_experiment: L0-021
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -45,6 +45,7 @@ completed_experiments:
   - L0-017_three_expert_oracle
   - L0-018_quality_gated_transport_count
   - L0-019_quality_gated_scale_oracles
+  - L0-020_angle_delay_component_oracles
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -61,16 +62,16 @@ dropped_families:
   - quality_gated_transport_count
   - scalar_power_or_complex_scale_calibration_after_quality_gate
 pending_queue:
-  - L0-020_angle_delay_component_oracles
+  - L0-021_observed_phase_transport_probe
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
 gpu_hours_used: 0.657
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  python scripts/diagnose_angle_delay_component_oracles.py
-git_commit: pending_l0_020_commit
-last_update_time: 2026-08-22T20:05:00+08:00
+  python scripts/diagnose_observed_phase_transport.py
+git_commit: pending_l0_021_commit
+last_update_time: 2026-08-22T20:15:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -111,3 +112,6 @@ notes:
   - L0-018 missed its fixed 0.003 promotion threshold and is dropped without a count scan.
   - L0-019 complex-scale oracle reached only 0.644092; real and power scaling were worse.
   - L0-019 stayed below 0.65, so scale calibration remains dropped.
+  - L0-020 target-phase oracle reached 0.666379 and improved NMSE to 0.633792.
+  - L0-020 target-magnitude oracle reached 0.822616 for PAS/PDP but worsened NMSE to 1.676107.
+  - Earlier magnitude predictors already failed spatial transfer, so L0-021 tests observed pathwise phase before another magnitude model.

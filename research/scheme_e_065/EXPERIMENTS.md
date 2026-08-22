@@ -451,3 +451,29 @@ L0-014 已改变相位对齐和 NMSE，因此必须重新计算新基线的单�
 ### Expected Signal
 
 至少一个分支的诊断上限明显超过 `0.67`，否则不值得继续做单分量模型。
+
+### Result
+
+预测幅度加真值逐 bin 相位得到 PAS=`0.577754`、PDP=`0.782157`、NMSE=`0.633792`、Score=`0.666379`。真值幅度加预测逐 bin 相位得到 PAS=`0.957186`、PDP=`0.912516`、NMSE=`1.676107`、Score=`0.822616`。耗时 `2.45` 秒。
+
+### Interpretation
+
+幅度误差主导 PAS/PDP，但此前 rank GP、full-resolution refiner 和 local transfer 已连续证明这部分很难空间预测。逐路径相位分支的上限虽较低，却已足够超过目标，而且可以从真实观测邻点获得，不必仅凭坐标生成。
+
+### Decision
+
+`PROMOTE_COMPONENT_PROBE`。先验证载波对齐邻点相位的可用性，不立即训练大型网络。
+
+## L0-021
+
+### Hypothesis
+
+载波对齐后的同基站观测邻点，在 angle-delay 每个 bin 上保留了可迁移相位；用它替换新基线相位可以验证 query-conditioned phase attention 的可行性。
+
+### Minimal Experiment
+
+固定使用当前 transport 的 8 个候选和 L0-014 carrier quality gate。幅度始终取 quality-gated V4；分别使用最近邻相位、8 邻居相干融合相位，并计算 8 个单邻居相位专家的 target-informed oracle。
+
+### Expected Signal
+
+任一直接候选提升至少 `0.003`，或邻点相位专家 oracle 达到 `0.655`；否则 DROP，不训练 phase attention。
