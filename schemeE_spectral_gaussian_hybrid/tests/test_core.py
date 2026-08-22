@@ -52,6 +52,10 @@ from scheme_e.local_magnitude import (
     same_cell_neighbors,
     transfer_log_power_residual,
 )
+from scheme_e.marginal_projection import (
+    alternating_marginal_projection,
+    decode_pas_marginals,
+)
 from scheme_e.power_safety import (
     apply_outage_policy,
     apply_power_calibration,
@@ -102,6 +106,39 @@ def test_carrier_quality_gate_keeps_reliable_fit_and_replaces_weak_fit() -> None
     np.testing.assert_array_equal(gated.qualities, fit.qualities)
     np.testing.assert_array_equal(gated.pair_counts, fit.pair_counts)
     assert gated.wave_numbers is not fit.wave_numbers
+
+
+def test_round1_marginal_projection_is_finite_and_power_aligned() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(2141)
+    target = torch.complex(
+        torch.randn(2, *shape.raw_shape, generator=generator),
+        torch.randn(2, *shape.raw_shape, generator=generator),
+    )
+    seed = torch.complex(
+        torch.randn(2, *shape.raw_shape, generator=generator),
+        torch.randn(2, *shape.raw_shape, generator=generator),
+    )
+    targets = channel_spectral_targets(target, shape, proxy_count=2)
+    horizontal, vertical = decode_pas_marginals(
+        targets["pas_log"], shape, proxy_count=2
+    )
+    assert torch.allclose(horizontal.sum(1), torch.ones(2), atol=1e-6)
+    assert torch.allclose(vertical.sum(1), torch.ones(2), atol=1e-6)
+    projected = alternating_marginal_projection(
+        seed,
+        targets["pas_log"],
+        targets["pdp_log"],
+        targets["ue_log_energy"],
+        shape,
+        iterations=2,
+        proxy_count=2,
+    )
+    assert projected.shape == seed.shape
+    assert torch.isfinite(projected).all()
+    projected_energy = projected.abs().square().mean(dim=(1, 3))
+    target_energy = torch.pow(10.0, targets["ue_log_energy"])
+    assert torch.allclose(projected_energy, target_energy, rtol=1e-4, atol=1e-5)
 
 
 def test_spectral_targets_and_projection_are_finite() -> None:
@@ -783,6 +820,9 @@ def test_v7_neural_teacher_preserves_full_latent_width() -> None:
 class SchemeECoreTests(unittest.TestCase):
     def test_carrier_quality_gate(self) -> None:
         test_carrier_quality_gate_keeps_reliable_fit_and_replaces_weak_fit()
+
+    def test_round1_marginal_projection(self) -> None:
+        test_round1_marginal_projection_is_finite_and_power_aligned()
 
     def test_diagnostic_metric_bridge(self) -> None:
         test_diagnostic_metrics_match_streaming_evaluator()

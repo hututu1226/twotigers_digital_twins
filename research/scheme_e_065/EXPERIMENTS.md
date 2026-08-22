@@ -315,3 +315,33 @@ Teacher profile 对齐后的局部残差候选为 PAS=`0.559358`、PDP=`0.764518
 ### Leakage Control
 
 载波拟合只来自 Fold0-train；回退先验来自初赛程序；规则在查看本实验 Fold0 结果前固定。Fold0 target 只计算最终指标。
+
+### Result
+
+严格 Fold0 从 PAS=`0.567081`、PDP=`0.758360`、NMSE=`1.063711`、Score=`0.627089` 提升为 PAS=`0.570384`、PDP=`0.759130`、NMSE=`1.004499`、Score=`0.631581`，净增 `+0.004492`。BS0 保持 `0.677591`；BS1 从 `0.575997` 提升到 `0.583336`。耗时 `37.28` 秒。
+
+### Interpretation
+
+BS1 的低质量拟合确实把 transport seed 搬向了错误相位。回退规则同时改善 PAS 和 NMSE，且改善集中在 BS1，符合预先提出的因果方向，不是单纯功率缩放造成的偶然收益。
+
+### Decision
+
+`KEEP`，将 `0.631581` 设为新的权威严格 Fold0 基线。后续 final inference 必须使用同一 quality gate。
+
+## L0-015
+
+### Hypothesis
+
+初赛的独立水平/垂直 PAS 边缘交替投影与 V4 的联合 2-D PAS 生成误差不同，可以成为新基线之外的第三个互补专家。
+
+### Minimal Experiment
+
+固定使用初赛提交参数 `k=24`、距离幂 `2.0`、投影 `8` 轮；transport 使用 L0-014 已冻结的 quality gate；频谱和 UE 功率目标来自严格 Fold0 OOF AI Teacher。生成完整候选 NPY，并与新基线计算严格二专家诊断 oracle。
+
+### Expected Signal
+
+候选本身若超过 `0.631581` 则直接升级；否则只有二专家 oracle 超过 `0.66` 才允许进入 OOF Router。`0.65~0.66` 仅保留专家，不训练 Router。
+
+### Abort Rule
+
+二专家 oracle 不超过 `0.65` 时立即 DROP，不扫描邻居数、投影轮数或幅度常数。

@@ -189,14 +189,15 @@ def _collect_variant(
     save_path: Path | None,
     compare_path: Path | None,
     include_scale_oracles: bool,
+    carrier_fit_override: CarrierFit | None = None,
 ) -> dict[str, object]:
     model, shape, checkpoint = load_hybrid_checkpoint(config, checkpoint_path, device)
     summary = _read_json(checkpoint_path.parent / "summary.json")
     strategy = _reference_strategy(config, summary)
     transport_config = config["hybrid"].get("transport_seed", {})
     carrier_payload = checkpoint.get("carrier_fit")
-    carrier_fit = None
-    if carrier_payload is not None:
+    carrier_fit = carrier_fit_override
+    if carrier_fit is None and carrier_payload is not None:
         carrier_fit = CarrierFit(
             np.asarray(carrier_payload["wave_numbers"], dtype=np.float64),
             np.asarray(carrier_payload["qualities"], dtype=np.float64),

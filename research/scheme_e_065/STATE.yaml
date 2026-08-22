@@ -1,22 +1,23 @@
 campaign: scheme_e_strict_fold0_065
-status: carrier_quality_fallback_ready
-authoritative_best: 0.627089141574626
+status: round1_marginal_expert_ready
+authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
 best_metrics:
-  pas: 0.5670812
-  pdp: 0.7583597
-  nmse: 1.0637109
+  pas: 0.5703839
+  pdp: 0.7591298
+  nmse: 1.0044990
 best_artifact_paths:
   config: schemeE_spectral_gaussian_hybrid/configs/v4_fold_best.json
   checkpoint: schemeE_spectral_gaussian_hybrid/artifacts/v4/fold0_attempt1/hybrid/best.pt
   policy: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_policy.json
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
-  prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
+  carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
+  prediction: pending_l0_015_quality_gated_export
 current_hypothesis: >-
-  The BS1 carrier fit has very low coherence and should fall back to the stable
-  Round1 global carrier prior instead of moving the transport seed to an alias.
-current_experiment: L0-014
+  The Round1 horizontal/vertical marginal projection is structurally different
+  from V4 joint 2-D PAS generation and can provide a third complementary expert.
+current_experiment: L0-015
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -37,6 +38,7 @@ completed_experiments:
   - L0-012_local_magnitude_residual_transfer
   - L2-001_adaptive_teacher_conditioned_hybrid_finetune
   - L0-013_teacher_profile_aligned_local_magnitude_transfer
+  - L0-014_carrier_quality_fallback
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -50,17 +52,16 @@ dropped_families:
   - query_only_full_resolution_magnitude_refiner
   - adaptive_teacher_conditioned_hybrid_finetune
 pending_queue:
-  - L0-014_carrier_quality_fallback
-  - round1_marginal_spectral_projection_expert_if_l0_014_fails
+  - L0-015_round1_marginal_spectral_projection_expert
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.555
+gpu_hours_used: 0.565
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_carrier_fallback.sh
-git_commit: pending_l0_014_commit
-last_update_time: 2026-08-22T18:40:00+08:00
+  bash scripts/run_scheme_e_065_round1_marginal.sh
+git_commit: pending_l0_015_commit
+last_update_time: 2026-08-22T19:05:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -90,3 +91,6 @@ notes:
   - L0-013 aligned local transfer scored 0.617594; alignment recovered 0.001698 over the unaligned candidate but remained below V4.
   - L0-013 V4+local target-informed oracle reached 0.648161, still below both the 0.65 target and the 0.66 Router promotion threshold.
   - Round1 used a stable global carrier slope near -140.33; the current BS1 fit is -146.067 with quality only 0.124 versus BS0 quality 0.784.
+  - L0-014 quality gating kept BS0 at -140.385 and replaced only BS1 with -140.33.
+  - L0-014 strict Fold0 reached 0.631581 (+0.004492); PAS, PDP, and NMSE all improved.
+  - L0-014 BS1 improved from 0.575997 to 0.583336 while BS0 stayed at 0.677591.
