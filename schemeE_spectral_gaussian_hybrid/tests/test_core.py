@@ -26,7 +26,11 @@ from scheme_e.power_safety import (
     compute_power_bounds,
     fit_power_calibration,
 )
-from scheme_e.projection import alternating_spectral_projection, relaxed_output_projection
+from scheme_e.projection import (
+    _pas_projection,
+    alternating_spectral_projection,
+    relaxed_output_projection,
+)
 from scheme_e.reference import build_reference_candidates
 from scheme_e.reference_context import (
     REFERENCE_CONTEXT_DIM,
@@ -93,6 +97,49 @@ def test_relaxed_output_projection_preserves_requested_power() -> None:
         10.0, 0.5 * (requested_power[0] - targets["log_power"][0])
     )
     assert torch.allclose(projected[0], expected_first, atol=1e-5)
+
+
+def test_pas_projection_uses_mean_pas_target() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(17)
+    source = torch.complex(
+        torch.randn(3, *shape.raw_shape, generator=generator),
+        torch.randn(3, *shape.raw_shape, generator=generator),
+    )
+    target_channel = torch.complex(
+        torch.randn(3, *shape.raw_shape, generator=generator),
+        torch.randn(3, *shape.raw_shape, generator=generator),
+    )
+    target = channel_spectral_targets(target_channel, shape, proxy_count=2)
+    target_proxy, target_mean = decode_pas_log(
+        target["pas_log"], shape, proxy_count=2
+    )
+    source_mean = decode_pas_log(
+        channel_spectral_targets(source, shape, proxy_count=2)["pas_log"],
+        shape,
+        proxy_count=2,
+    )[1]
+    projected = _pas_projection(
+        source,
+        target_proxy,
+        target_mean,
+        shape,
+        proxy_count=2,
+        minimum_scale=0.01,
+        maximum_scale=100.0,
+    )
+    projected_mean = decode_pas_log(
+        channel_spectral_targets(projected, shape, proxy_count=2)["pas_log"],
+        shape,
+        proxy_count=2,
+    )[1]
+
+    def cosine(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        left = left.flatten(1)
+        right = right.flatten(1)
+        return (left * right).sum(1) / (left.norm(dim=1) * right.norm(dim=1))
+
+    assert torch.all(cosine(projected_mean, target_mean) > cosine(source_mean, target_mean))
 
 
 def test_structured_spectral_field_preserves_absolute_grid_axes() -> None:
@@ -407,6 +454,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_relaxed_output_projection(self) -> None:
         test_relaxed_output_projection_preserves_requested_power()
+
+    def test_pas_projection_mean_target(self) -> None:
+        test_pas_projection_uses_mean_pas_target()
 
     def test_structured_spectral_field(self) -> None:
         test_structured_spectral_field_preserves_absolute_grid_axes()

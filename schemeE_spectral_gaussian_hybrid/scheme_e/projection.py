@@ -9,6 +9,7 @@ from .spectral_targets import decode_pas_log, decode_pdp_log
 def _pas_projection(
     channel: torch.Tensor,
     target_proxy: torch.Tensor,
+    target_mean: torch.Tensor,
     shape: ChannelShape,
     proxy_count: int,
     minimum_scale: float,
@@ -24,6 +25,16 @@ def _pas_projection(
     scale = scale.clamp(float(minimum_scale), float(maximum_scale))
     scale = scale.repeat_interleave(group_size, dim=1).permute(0, 2, 3, 1)
     beam = beam * scale[:, None, :, :, None, :].to(beam.dtype)
+
+    mean_power = beam.abs().square().float().mean(dim=(1, 4)).mean(dim=-1)
+    current_mean = mean_power / mean_power.sum(
+        dim=(1, 2), keepdim=True
+    ).clamp_min(1e-30)
+    mean_scale = torch.sqrt(
+        target_mean.clamp_min(1e-30) / current_mean.clamp_min(1e-30)
+    )
+    mean_scale = mean_scale.clamp(float(minimum_scale), float(maximum_scale))
+    beam = beam * mean_scale[:, None, :, :, None, None].to(beam.dtype)
     return torch.fft.ifft2(beam, dim=(2, 3), norm="ortho").reshape_as(channel)
 
 
@@ -68,13 +79,14 @@ def alternating_spectral_projection(
 ) -> torch.Tensor:
     if iterations < 0:
         raise ValueError("iterations must be non-negative")
-    target_proxy, _ = decode_pas_log(pas_log, shape, proxy_count)
+    target_proxy, target_mean = decode_pas_log(pas_log, shape, proxy_count)
     target_pdp = decode_pdp_log(pdp_log, shape)
     result = channel
     for _ in range(int(iterations)):
         result = _pas_projection(
             result,
             target_proxy,
+            target_mean,
             shape,
             proxy_count,
             minimum_scale,
