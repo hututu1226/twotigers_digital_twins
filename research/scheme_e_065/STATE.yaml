@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: round1_marginal_expert_ready
+status: transport_count_gate_ready
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -13,11 +13,12 @@ best_artifact_paths:
   policy: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_policy.json
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
-  prediction: pending_l0_015_quality_gated_export
+  prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  The Round1 horizontal/vertical marginal projection is structurally different
-  from V4 joint 2-D PAS generation and can provide a third complementary expert.
-current_experiment: L0-015
+  BS1 carrier fit quality is only 0.124, so averaging several imperfectly
+  carrier-aligned complex neighbors may cancel useful signal; a fixed
+  quality gate should use one transport neighbor for that cell.
+current_experiment: L0-018
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -39,6 +40,9 @@ completed_experiments:
   - L2-001_adaptive_teacher_conditioned_hybrid_finetune
   - L0-013_teacher_profile_aligned_local_magnitude_transfer
   - L0-014_carrier_quality_fallback
+  - L0-015_round1_marginal_spectral_projection_expert
+  - L0-016_quality_gated_local_oracle
+  - L0-017_three_expert_oracle
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -51,17 +55,19 @@ dropped_families:
   - rank8_magnitude_coefficient_gp_regression
   - query_only_full_resolution_magnitude_refiner
   - adaptive_teacher_conditioned_hybrid_finetune
+  - round1_marginal_projection_as_primary_route
 pending_queue:
-  - L0-015_round1_marginal_spectral_projection_expert
+  - L0-018_quality_gated_transport_count
+  - path_selective_carrier_fit_only_if_transport_count_probe_supports_the_mechanism
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.565
+gpu_hours_used: 0.657
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_round1_marginal.sh
-git_commit: pending_l0_015_commit
-last_update_time: 2026-08-22T19:05:00+08:00
+  python scripts/diagnose_transport_count_gate.py
+git_commit: pending_l0_018_commit
+last_update_time: 2026-08-22T19:25:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -94,3 +100,7 @@ notes:
   - L0-014 quality gating kept BS0 at -140.385 and replaced only BS1 with -140.33.
   - L0-014 strict Fold0 reached 0.631581 (+0.004492); PAS, PDP, and NMSE all improved.
   - L0-014 BS1 improved from 0.575997 to 0.583336 while BS0 stayed at 0.677591.
+  - L0-015 Round1 marginal candidate scored 0.613227 and is dropped; its two-expert oracle was only 0.637756.
+  - L0-016 quality-gated V4 plus aligned local residual oracle reached 0.648399, diagnostic only.
+  - L0-017 added the Round1 marginal candidate and raised the three-expert oracle to 0.651713, diagnostic only.
+  - L0-017 is below the fixed 0.66 Router threshold, so no complex Router is trained.

@@ -345,3 +345,57 @@ BS1 的低质量拟合确实把 transport seed 搬向了错误相位。回退规
 ### Abort Rule
 
 二专家 oracle 不超过 `0.65` 时立即 DROP，不扫描邻居数、投影轮数或幅度常数。
+
+### Result
+
+Round1 marginal 候选 PAS=`0.547398`、PDP=`0.741646`、NMSE=`1.048985`、Score=`0.613227`，比 quality-gated V4 低 `0.018354`。二专家诊断 oracle 为 `0.637756`，只增加 `0.006175`。耗时 `30.42` 秒。
+
+### Interpretation
+
+独立 H/V 边缘投影没有保住联合二维角度结构；它既不是更好的直接输出，也没有形成足够强的互补性。
+
+### Decision
+
+`DROP`。不扫描邻居数、投影轮数或幅度常数。
+
+## L0-016
+
+### Result
+
+使用 L0-014 新基线重新计算 aligned local residual 的二专家上限。候选仍为 `0.617594`；诊断 oracle 为 PAS=`0.596790`、PDP=`0.771787`、NMSE=`0.980819`、Score=`0.648399`，相对新基线增加 `0.016818`。耗时 `149.53` 秒。
+
+### Interpretation
+
+新基线与局部残差确有互补，但理想选择也没有越过 `0.65`，因此单独围绕这两个专家训练 Router 没有足够上限。
+
+### Decision
+
+`KEEP_AS_EXPERT`，不训练二专家 Router。
+
+## L0-017
+
+### Result
+
+quality-gated V4、aligned local residual 与 Round1 marginal 的三专家诊断 oracle 为 PAS=`0.603995`、PDP=`0.772775`、NMSE=`0.980102`、Score=`0.651713`，相对可部署基线增加 `0.020132`。理想选择计数为 V4=`263`、local=`204`、marginal=`98`。耗时 `152.19` 秒。
+
+### Interpretation
+
+三个专家合起来的理想上限刚超过目标，但仍低于事先固定的 `0.66` Router 晋级线。现实 Router 只能追回 oracle 增益的一部分，现在训练复杂 Router 很可能仍达不到 `0.65`。
+
+### Decision
+
+`KEEP_AS_EXPERT`。不训练 Router，转向能直接提高 BS1 基线的 transport 相干度问题。
+
+## L0-018
+
+### Hypothesis
+
+BS1 的 carrier fit 质量只有 `0.124`，即使斜率回退后，多邻居复数平均仍可能发生相消；低质量 cell 使用单一 transport 邻居应改善 BS1。
+
+### Minimal Experiment
+
+保持 checkpoint、Teacher、outage policy、output projection、BS0 和载波斜率不变。仅在 BS1 将 transport count 固定为 `1`，与当前 count 做严格同样本比较。
+
+### Expected Signal
+
+BS1 Score 至少增加 `0.003`；否则不实现按 cell gate，也不扫描其他 count。
