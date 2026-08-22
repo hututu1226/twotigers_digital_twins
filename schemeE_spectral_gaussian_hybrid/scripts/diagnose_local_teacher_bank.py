@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import pickle
 import time
 
 import _bootstrap  # noqa: F401
 import numpy as np
+from sklearn.ensemble import ExtraTreesRegressor
 
 from scheme_e.carrier_transport import CarrierFit
 from scheme_e.config import choose_device, load_config, save_json
@@ -50,6 +52,208 @@ def _power_cosine(
     numerator = np.einsum("ij,ij->i", prediction, target, optimize=True)
     denominator = np.linalg.norm(prediction, axis=1) * np.linalg.norm(target, axis=1)
     return np.clip(numerator / np.maximum(denominator, 1e-30), 0.0, 1.0)
+
+
+def _gate_features(
+    metadata: dict[str, np.ndarray],
+    predictions: np.ndarray,
+    uncertainties: np.ndarray,
+    scale: float,
+) -> np.ndarray:
+    count = predictions.shape[1]
+    expert_count = predictions.shape[0]
+    base_power = np.expm1(
+        np.clip(predictions[0].astype(np.float32), 0.0, 20.0)
+    ) / float(scale)
+    base_norm = np.linalg.norm(base_power, axis=1)
+    agreement = np.empty((count, expert_count), dtype=np.float32)
+    concentration = np.empty_like(agreement)
+    peak_fraction = np.empty_like(agreement)
+    for expert in range(expert_count):
+        power = np.expm1(
+            np.clip(predictions[expert].astype(np.float32), 0.0, 20.0)
+        ) / float(scale)
+        norm = np.linalg.norm(power, axis=1)
+        agreement[:, expert] = np.clip(
+            np.einsum("ij,ij->i", power, base_power, optimize=True)
+            / np.maximum(norm * base_norm, 1e-30),
+            0.0,
+            1.0,
+        )
+        total = power.sum(axis=1)
+        concentration[:, expert] = norm / np.maximum(total, 1e-30)
+        peak_fraction[:, expert] = power.max(axis=1) / np.maximum(total, 1e-30)
+    cells = metadata["train_cells"][:count].astype(np.int64)
+    cell_count = int(cells.max()) + 1
+    one_hot = np.eye(cell_count, dtype=np.float32)[cells]
+    features = np.concatenate(
+        [
+            metadata["train_positions"][:count, :2].astype(np.float32),
+            metadata["train_geometry_features"][:count].astype(np.float32),
+            one_hot,
+            uncertainties[:, :count].T.astype(np.float32),
+            agreement,
+            concentration,
+            peak_fraction,
+        ],
+        axis=1,
+    )
+    return np.nan_to_num(features, nan=0.0, posinf=1e6, neginf=-1e6)
+
+
+def _expert_scores(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    indices: np.ndarray,
+    scale: float,
+) -> np.ndarray:
+    return np.stack(
+        [
+            _power_cosine(value[indices], targets[indices], scale)
+            for value in predictions
+        ],
+        axis=1,
+    ).astype(np.float32)
+
+
+def _softmax_scores(scores: np.ndarray, temperature: float) -> np.ndarray:
+    centered = scores / float(temperature)
+    centered -= centered.max(axis=1, keepdims=True)
+    weights = np.exp(np.clip(centered, -40.0, 0.0))
+    return weights / np.maximum(weights.sum(axis=1, keepdims=True), 1e-30)
+
+
+def _weighted_log_predictions(
+    predictions: np.ndarray,
+    indices: np.ndarray,
+    weights: np.ndarray,
+    scale: float,
+    batch_size: int = 128,
+) -> np.ndarray:
+    output = np.empty((len(indices), predictions.shape[2]), dtype=np.float32)
+    for start in range(0, len(indices), int(batch_size)):
+        stop = min(start + int(batch_size), len(indices))
+        local = indices[start:stop]
+        power = np.expm1(
+            np.clip(predictions[:, local].astype(np.float32), 0.0, 20.0)
+        ) / float(scale)
+        mixed = np.einsum(
+            "be,ebd->bd", weights[start:stop], power, optimize=True
+        )
+        output[start:stop] = np.log1p(float(scale) * np.maximum(mixed, 0.0))
+    return output
+
+
+def _adaptive_gate(
+    metadata: dict[str, np.ndarray],
+    targets: np.ndarray,
+    predictions: np.ndarray,
+    uncertainties: np.ndarray,
+    training_indices: np.ndarray,
+    base_weights_by_cell: np.ndarray,
+    scale: float,
+    seed: int,
+) -> tuple[np.ndarray, ExtraTreesRegressor, dict[str, object]]:
+    features = _gate_features(metadata, predictions, uncertainties, scale)
+    scores = _expert_scores(predictions, targets, training_indices, scale)
+    folds = metadata["spectral_folds"][training_indices]
+    holdout_fold = int(sorted(np.unique(folds).tolist())[-1])
+    fit_mask = folds != holdout_fold
+    holdout_mask = ~fit_mask
+    fit_indices = training_indices[fit_mask]
+    holdout_indices = training_indices[holdout_mask]
+    development = ExtraTreesRegressor(
+        n_estimators=192,
+        max_depth=12,
+        min_samples_leaf=8,
+        max_features=0.75,
+        n_jobs=-1,
+        random_state=int(seed),
+    )
+    development.fit(features[fit_indices], scores[fit_mask])
+    predicted_scores = development.predict(features[holdout_indices]).astype(np.float32)
+    cells = metadata["train_cells"][: len(features)].astype(np.int64)
+    alpha_grid = (0.25, 0.5, 0.75, 1.0)
+    temperature_grid = (0.01, 0.02, 0.05, 0.1, 0.2)
+    selections: list[dict[str, float | int]] = []
+    for cell in range(len(base_weights_by_cell)):
+        local_mask = cells[holdout_indices] == cell
+        local_indices = holdout_indices[local_mask]
+        if not len(local_indices):
+            selections.append(
+                {
+                    "cell": cell,
+                    "holdout_samples": 0,
+                    "alpha": 0.0,
+                    "temperature": 0.1,
+                    "score": 0.0,
+                }
+            )
+            continue
+        fixed = np.repeat(
+            base_weights_by_cell[cell][None], len(local_indices), axis=0
+        )
+        baseline_prediction = _weighted_log_predictions(
+            predictions, local_indices, fixed, scale
+        )
+        best_score = float(
+            _power_cosine(baseline_prediction, targets[local_indices], scale).mean()
+        )
+        best_alpha = 0.0
+        best_temperature = 0.1
+        for alpha in alpha_grid:
+            for temperature in temperature_grid:
+                adaptive = _softmax_scores(
+                    predicted_scores[local_mask], temperature
+                )
+                weights = (1.0 - alpha) * fixed + alpha * adaptive
+                prediction = _weighted_log_predictions(
+                    predictions, local_indices, weights, scale
+                )
+                score = float(
+                    _power_cosine(prediction, targets[local_indices], scale).mean()
+                )
+                if score > best_score:
+                    best_score = score
+                    best_alpha = float(alpha)
+                    best_temperature = float(temperature)
+        selections.append(
+            {
+                "cell": cell,
+                "holdout_samples": int(len(local_indices)),
+                "alpha": best_alpha,
+                "temperature": best_temperature,
+                "score": best_score,
+            }
+        )
+
+    final_model = ExtraTreesRegressor(
+        n_estimators=256,
+        max_depth=12,
+        min_samples_leaf=8,
+        max_features=0.75,
+        n_jobs=-1,
+        random_state=int(seed) + 1,
+    )
+    final_model.fit(features[training_indices], scores)
+    final_scores = final_model.predict(features).astype(np.float32)
+    all_weights = np.empty(
+        (len(features), predictions.shape[0]), dtype=np.float32
+    )
+    for selection in selections:
+        cell = int(selection["cell"])
+        mask = cells == cell
+        fixed = np.repeat(base_weights_by_cell[cell][None], int(mask.sum()), axis=0)
+        adaptive = _softmax_scores(
+            final_scores[mask], float(selection["temperature"])
+        )
+        alpha = float(selection["alpha"])
+        all_weights[mask] = (1.0 - alpha) * fixed + alpha * adaptive
+    return all_weights, final_model, {
+        "holdout_fold": holdout_fold,
+        "feature_width": int(features.shape[1]),
+        "selections": selections,
+    }
 
 
 def _local_bank(
@@ -194,6 +398,13 @@ def main() -> None:
         "--output-prior", default="artifacts/v6/fold0/local_bank_priors.npz"
     )
     parser.add_argument(
+        "--adaptive-output-prior",
+        default="artifacts/v6/fold0/adaptive_local_bank_priors.npz",
+    )
+    parser.add_argument(
+        "--gate-model", default="artifacts/v6/fold0/adaptive_local_gate.pkl"
+    )
+    parser.add_argument(
         "--output", default="reports/generated/v6_local_teacher_bank.json"
     )
     args = parser.parse_args()
@@ -329,6 +540,73 @@ def main() -> None:
     output_prior.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_prior, **improved)
 
+    pas_gate_weights, pas_gate, pas_gate_report = _adaptive_gate(
+        metadata,
+        targets["pas_log"],
+        pas_predictions,
+        uncertainty_predictions,
+        nonzero_observed,
+        pas_weights,
+        PAS_LOG_SCALE,
+        int(config["seed"]) + 601,
+    )
+    pdp_gate_weights, pdp_gate, pdp_gate_report = _adaptive_gate(
+        metadata,
+        targets["pdp_log"],
+        pdp_predictions,
+        uncertainty_predictions,
+        nonzero_observed,
+        pdp_weights,
+        PDP_LOG_SCALE,
+        int(config["seed"]) + 607,
+    )
+    adaptive = {name: np.array(value, copy=True) for name, value in base.items()}
+    adaptive["pas_log"][:count] = _weighted_log_predictions(
+        pas_predictions,
+        indices,
+        pas_gate_weights,
+        PAS_LOG_SCALE,
+    ).astype(adaptive["pas_log"].dtype)
+    adaptive["pdp_log"][:count] = _weighted_log_predictions(
+        pdp_predictions,
+        indices,
+        pdp_gate_weights,
+        PDP_LOG_SCALE,
+    ).astype(adaptive["pdp_log"].dtype)
+    adaptive["local_bank_names"] = np.asarray(names)
+    adaptive["adaptive_pas_alpha_by_cell"] = np.asarray(
+        [value["alpha"] for value in pas_gate_report["selections"]],
+        dtype=np.float32,
+    )
+    adaptive["adaptive_pas_temperature_by_cell"] = np.asarray(
+        [value["temperature"] for value in pas_gate_report["selections"]],
+        dtype=np.float32,
+    )
+    adaptive["adaptive_pdp_alpha_by_cell"] = np.asarray(
+        [value["alpha"] for value in pdp_gate_report["selections"]],
+        dtype=np.float32,
+    )
+    adaptive["adaptive_pdp_temperature_by_cell"] = np.asarray(
+        [value["temperature"] for value in pdp_gate_report["selections"]],
+        dtype=np.float32,
+    )
+    adaptive_output_prior = Path(args.adaptive_output_prior)
+    adaptive_output_prior.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(adaptive_output_prior, **adaptive)
+    gate_model_path = Path(args.gate_model)
+    gate_model_path.parent.mkdir(parents=True, exist_ok=True)
+    with gate_model_path.open("wb") as handle:
+        pickle.dump(
+            {
+                "names": names,
+                "pas_model": pas_gate,
+                "pdp_model": pdp_gate,
+                "pas_report": pas_gate_report,
+                "pdp_report": pdp_gate_report,
+            },
+            handle,
+        )
+
     base_pas = _power_cosine(
         base["pas_log"][nonzero_validation],
         targets["pas_log"][nonzero_validation],
@@ -346,6 +624,16 @@ def main() -> None:
     )
     improved_pdp = _power_cosine(
         improved["pdp_log"][nonzero_validation],
+        targets["pdp_log"][nonzero_validation],
+        PDP_LOG_SCALE,
+    )
+    adaptive_pas = _power_cosine(
+        adaptive["pas_log"][nonzero_validation],
+        targets["pas_log"][nonzero_validation],
+        PAS_LOG_SCALE,
+    )
+    adaptive_pdp = _power_cosine(
+        adaptive["pdp_log"][nonzero_validation],
         targets["pdp_log"][nonzero_validation],
         PDP_LOG_SCALE,
     )
@@ -389,10 +677,23 @@ def main() -> None:
     )
     improved_context = dict(baseline_context)
     improved_context["priors"] = improved
+    adaptive_context = dict(baseline_context)
+    adaptive_context["priors"] = adaptive
     baseline_channel = evaluate_hybrid(**baseline_context)
     improved_channel = evaluate_hybrid(**improved_context)
     improved_projected = evaluate_hybrid(
         **improved_context,
+        output_projection={
+            "iterations": 2,
+            "strength_by_cell": [0.5] * cell_count,
+            "minimum_scale": 0.5,
+            "maximum_scale": 2.0,
+            "channel_source": "model",
+        },
+    )
+    adaptive_channel = evaluate_hybrid(**adaptive_context)
+    adaptive_projected = evaluate_hybrid(
+        **adaptive_context,
         output_projection={
             "iterations": 2,
             "strength_by_cell": [0.5] * cell_count,
@@ -413,16 +714,26 @@ def main() -> None:
             "base_pdp": float(base_pdp.mean()),
             "improved_pas": float(improved_pas.mean()),
             "improved_pdp": float(improved_pdp.mean()),
+            "adaptive_pas": float(adaptive_pas.mean()),
+            "adaptive_pdp": float(adaptive_pdp.mean()),
             "oracle_pas": float(pas_oracle.mean()),
             "oracle_pdp": float(pdp_oracle.mean()),
+        },
+        "adaptive_gate": {
+            "pas": pas_gate_report,
+            "pdp": pdp_gate_report,
+            "model_path": str(gate_model_path),
         },
         "cells": cell_reports,
         "channel": {
             "base": baseline_channel,
             "improved": improved_channel,
             "improved_projected": improved_projected,
+            "adaptive": adaptive_channel,
+            "adaptive_projected": adaptive_projected,
         },
         "output_prior": str(output_prior),
+        "adaptive_output_prior": str(adaptive_output_prior),
         "elapsed_seconds": time.perf_counter() - started,
     }
     save_json(args.output, report)
