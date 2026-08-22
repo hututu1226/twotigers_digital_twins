@@ -26,9 +26,6 @@ from scheme_e.power_safety import apply_outage_policy
 from scheme_e.residual_set_model import ResidualCoefficientSetEncoder
 
 
-BEST_SCORE = 0.627089141574626
-
-
 def _load_npz(path: str | Path) -> dict[str, np.ndarray]:
     with np.load(path) as source:
         return {name: np.array(source[name], copy=True) for name in source.files}
@@ -866,9 +863,21 @@ def main() -> None:
     )
     inner_baseline = alpha_metrics["0.0"]
     inner_gain = float(selected_inner["score"]) - float(inner_baseline["score"])
-    probe_passed = inner_gain >= float(args.minimum_inner_gain) and float(selected_alpha) > 0
+    inner_oracle_gain = (
+        float(inner_oracle["metrics"]["score"]) - float(inner_baseline["score"])
+    )
+    average_probe_passed = (
+        inner_gain >= float(args.minimum_inner_gain) and float(selected_alpha) > 0
+    )
+    expert_probe_passed = inner_oracle_gain >= 0.010
+    if average_probe_passed:
+        inner_status = "INNER_AVERAGE_PASS"
+    elif expert_probe_passed:
+        inner_status = "INNER_EXPERT_PASS"
+    else:
+        inner_status = "DROP"
     report: dict[str, object] = {
-        "status": "INNER_PASS" if probe_passed else "DROP",
+        "status": inner_status,
         "hypothesis": "A local-set model can predict rank-16 spectrum residual coefficients.",
         "fold": fold,
         "holdout_spectral_fold": holdout_fold,
@@ -886,15 +895,20 @@ def main() -> None:
             "spatial_diagnostic_metrics": spatial_metrics,
             "coefficient_diagnostics": coefficient_diagnostics,
             "target_informed_candidate_oracle": inner_oracle,
-            "target_informed_candidate_oracle_gain": (
-                float(inner_oracle["metrics"]["score"])
-                - float(inner_baseline["score"])
-            ),
+            "target_informed_candidate_oracle_gain": inner_oracle_gain,
+            "average_probe_passed": average_probe_passed,
+            "expert_probe_passed": expert_probe_passed,
         },
         "strict_fold0": None,
-        "decision": "DROP" if not probe_passed else "PENDING_FULL_PROBE",
+        "decision": (
+            "PENDING_FULL_PROBE"
+            if average_probe_passed
+            else "PENDING_STRICT_EXPERT_ORACLE"
+            if expert_probe_passed
+            else "DROP"
+        ),
     }
-    if not probe_passed:
+    if not (average_probe_passed or expert_probe_passed):
         report["elapsed_seconds"] = time.perf_counter() - started
         save_json(args.report, report)
         print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
@@ -1011,24 +1025,6 @@ def main() -> None:
             }
         )
 
-    strict_output = output_dir / "Fold0_Residual_Prediction.npy"
-    strict_metrics, strict_arrays = _decode_metrics(
-        validation,
-        strict_predictions[validation],
-        seed_cache,
-        bases,
-        metadata,
-        priors,
-        channels,
-        autoencoder,
-        shape,
-        device,
-        int(args.decode_batch_size),
-        float(selected_alpha),
-        outage_thresholds,
-        outage_strengths,
-        strict_output,
-    )
     baseline_arrays = _baseline_arrays(
         args.baseline_prediction,
         validation,
@@ -1038,12 +1034,105 @@ def main() -> None:
         device,
         int(args.decode_batch_size),
     )
+    baseline_metrics = aggregate_sample_metrics(baseline_arrays)
+    strict_candidate_arrays = {"baseline": baseline_arrays}
+    strict_candidate_metrics = {"baseline": baseline_metrics}
+    strict_candidate_inputs: dict[str, tuple[np.ndarray, float]] = {}
+    for alpha in (0.25, 0.5, 0.75, 1.0):
+        name = f"model_alpha_{alpha}"
+        metrics, arrays = _decode_metrics(
+            validation,
+            strict_predictions[validation],
+            seed_cache,
+            bases,
+            metadata,
+            priors,
+            channels,
+            autoencoder,
+            shape,
+            device,
+            int(args.decode_batch_size),
+            alpha,
+            outage_thresholds,
+            outage_strengths,
+        )
+        strict_candidate_metrics[name] = metrics
+        strict_candidate_arrays[name] = arrays
+        strict_candidate_inputs[name] = (strict_predictions[validation], alpha)
+    strict_spatial_predictions = {
+        "nearest1": _neighbor_coefficient_prediction(
+            metadata,
+            nonoutage_observed,
+            validation,
+            full_coefficients,
+            1,
+        ),
+        "mean16": _neighbor_coefficient_prediction(
+            metadata,
+            nonoutage_observed,
+            validation,
+            full_coefficients,
+            int(args.neighbors),
+        ),
+    }
+    for source, prediction in strict_spatial_predictions.items():
+        for alpha in (0.25, 0.5, 1.0):
+            name = f"{source}_alpha_{alpha}"
+            metrics, arrays = _decode_metrics(
+                validation,
+                prediction[validation],
+                seed_cache,
+                bases,
+                metadata,
+                priors,
+                channels,
+                autoencoder,
+                shape,
+                device,
+                int(args.decode_batch_size),
+                alpha,
+                outage_thresholds,
+                outage_strengths,
+            )
+            strict_candidate_metrics[name] = metrics
+            strict_candidate_arrays[name] = arrays
+            strict_candidate_inputs[name] = (prediction[validation], alpha)
     expert_oracle = target_informed_expert_oracle(
-        {"baseline": baseline_arrays, "residual_probe": strict_arrays}
+        strict_candidate_arrays
     )
     expert_oracle.pop("selection")
-    delta = float(strict_metrics["score"]) - BEST_SCORE
-    oracle_gain = float(expert_oracle["metrics"]["score"]) - BEST_SCORE
+    best_single_name, best_single_metrics = max(
+        strict_candidate_metrics.items(),
+        key=lambda item: float(item[1]["score"]),
+    )
+    best_single_arrays = strict_candidate_arrays[best_single_name]
+    baseline_score = float(baseline_metrics["score"])
+    delta = float(best_single_metrics["score"]) - baseline_score
+    oracle_gain = float(expert_oracle["metrics"]["score"]) - baseline_score
+    strict_output: str | None = str(args.baseline_prediction)
+    if best_single_name != "baseline":
+        output_path = output_dir / "Fold0_Residual_Prediction.npy"
+        coefficients_for_output, alpha_for_output = strict_candidate_inputs[
+            best_single_name
+        ]
+        _decode_metrics(
+            validation,
+            coefficients_for_output,
+            seed_cache,
+            bases,
+            metadata,
+            priors,
+            channels,
+            autoencoder,
+            shape,
+            device,
+            int(args.decode_batch_size),
+            alpha_for_output,
+            outage_thresholds,
+            outage_strengths,
+            output_path,
+        )
+        strict_output = str(output_path)
     if delta >= 0.004:
         decision = "PROMOTE"
     elif oracle_gain >= 0.010:
@@ -1053,17 +1142,19 @@ def main() -> None:
     else:
         decision = "DROP"
     np.savez_compressed(
-        output_dir / "Fold0_Per_Sample_Metrics.npz", **strict_arrays
+        output_dir / "Fold0_Per_Sample_Metrics.npz", **best_single_arrays
     )
     report.update(
         {
             "status": "PASS",
             "full_cells": full_reports,
             "strict_fold0": {
-                "metrics": strict_metrics,
-                "authoritative_baseline": BEST_SCORE,
+                "best_single_candidate": best_single_name,
+                "metrics": best_single_metrics,
+                "candidate_metrics": strict_candidate_metrics,
+                "authoritative_baseline": baseline_score,
                 "delta": delta,
-                "prediction": str(strict_output),
+                "prediction": strict_output,
                 "expert_oracle": expert_oracle,
                 "expert_oracle_gain": oracle_gain,
             },

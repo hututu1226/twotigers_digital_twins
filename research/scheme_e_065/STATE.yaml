@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: level0_failure_diagnostic_ready
+status: strict_expert_oracle_ready
 authoritative_best: 0.627089141574626
 target_score: 0.65000
 official_online_score: 0.59
@@ -14,9 +14,9 @@ best_artifact_paths:
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
 current_hypothesis: >-
-  Although the rank16 predictor harms the average, its corrections may be useful
-  on a reliably identifiable subset; otherwise the coefficient route must be closed.
-current_experiment: L0-008
+  The rank16 candidates may add at least 0.010 oracle complementarity to the
+  authoritative V4 baseline on strict Fold0.
+current_experiment: L0-009
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -26,6 +26,7 @@ completed_experiments:
   - L0-006_outage_oracle
   - L0-007_train_only_low_rank_residual_oracle
   - L1-001_rank16_spectrum_residual_local_set_probe
+  - L0-008_rank16_failure_counterfactual
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -35,19 +36,25 @@ dropped_families:
   - scalar_power_or_complex_scale_calibration_as_primary_route
   - rank16_local_set_coefficient_prediction
 pending_queue:
-  - L0-008_rank16_failure_counterfactual
+  - L0-009_strict_rank16_candidate_oracle
   - phase_or_complex_residual_probe_only_if_L1-001_fails_with_new_evidence
-gpu_hours_used: 0.07
+gpu_hours_used: 0.08
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_l1_probe.sh 2>&1 | tee logs/scheme_e_065_l1_failure_diagnostic.log
-git_commit: pending_l0_008_commit
-last_update_time: 2026-08-22T14:35:00+08:00
+  python scripts/train_residual_coefficient_probe.py --config configs/v4_fold_best.json
+  --cache-dir ../research/scheme_e_065/residual_rank
+  --baseline-prediction ../research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
+  --policy reports/generated/v4_attempt1_policy.json --device cuda
+  --output-dir artifacts/scheme_e_065/l0_009_strict_oracle
+  --report ../research/scheme_e_065/L0_009_STRICT_CANDIDATE_ORACLE.json
+git_commit: pending_l0_009_commit
+last_update_time: 2026-08-22T14:48:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
   - The rank oracle is diagnostic only and uses Fold0 targets only to select oracle coefficients.
   - L1-001 fits its inner PCA basis from inner-train only; Fold0 targets are never used for fitting.
   - L1-001 inner Score was 0.599283 at alpha 0 and every nonzero correction was worse.
+  - L0-008 inner candidate oracle gained 0.011291; simple neighbor coefficients had negative skill.
