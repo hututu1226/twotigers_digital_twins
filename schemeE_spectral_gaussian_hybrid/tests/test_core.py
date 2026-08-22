@@ -12,6 +12,12 @@ from scheme_e.carrier_transport import (
     build_transport_seed,
     select_transport_candidates,
 )
+from scheme_e.complex_residual import (
+    angle_delay_to_complex,
+    complex_to_angle_delay,
+    reconstruct_low_rank_residual,
+    split_complex_correction,
+)
 from scheme_e.gp import (
     SharedMultiOutputGP,
     convex_cosine_weights,
@@ -203,6 +209,35 @@ def test_spectrum_summary_features_are_finite_and_channel_preserving() -> None:
     assert features.shape == (2, 6)
     np.testing.assert_allclose(features[:, 4:], [[2.0, 4.0], [7.0, 6.0]])
     assert np.isfinite(features).all()
+
+
+def test_complex_residual_modes_preserve_requested_component() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(53)
+    base = torch.randn(2, *shape.ad_shape, generator=generator)
+    corrected = torch.randn(2, *shape.ad_shape, generator=generator)
+    base_complex = angle_delay_to_complex(base, shape)
+    corrected_complex = angle_delay_to_complex(corrected, shape)
+    assert torch.allclose(
+        complex_to_angle_delay(base_complex, shape), base, atol=1e-6
+    )
+    variants = split_complex_correction(base, corrected, shape)
+    magnitude = angle_delay_to_complex(variants["magnitude"], shape)
+    phase = angle_delay_to_complex(variants["phase"], shape)
+    assert torch.allclose(magnitude.abs(), corrected_complex.abs(), atol=1e-5)
+    assert torch.allclose(phase.abs(), base_complex.abs(), atol=1e-5)
+
+
+def test_low_rank_residual_reconstruction_uses_only_selected_rank() -> None:
+    residual = torch.tensor([[3.0, 4.0, 9.0], [5.0, 8.0, 7.0]])
+    mean = torch.tensor([1.0, 2.0, 7.0])
+    components = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    rank0 = reconstruct_low_rank_residual(residual, mean, components, rank=0)
+    rank1 = reconstruct_low_rank_residual(residual, mean, components, rank=1)
+    rank2 = reconstruct_low_rank_residual(residual, mean, components, rank=2)
+    assert torch.allclose(rank0, mean.expand_as(residual))
+    assert torch.allclose(rank1, torch.tensor([[3.0, 2.0, 7.0], [5.0, 2.0, 7.0]]))
+    assert torch.allclose(rank2, torch.tensor([[3.0, 4.0, 7.0], [5.0, 8.0, 7.0]]))
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -630,6 +665,12 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_spectrum_summary_features(self) -> None:
         test_spectrum_summary_features_are_finite_and_channel_preserving()
+
+    def test_complex_residual_modes(self) -> None:
+        test_complex_residual_modes_preserve_requested_component()
+
+    def test_low_rank_residual_reconstruction(self) -> None:
+        test_low_rank_residual_reconstruction_uses_only_selected_rank()
 
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()

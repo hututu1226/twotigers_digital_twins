@@ -14,7 +14,8 @@
 | L1-001 | 局部观测集合能够预测 rank16 频谱残差系数。 | 保留完整 seed latent，只预测 16 维修正。 | 非零 alpha 全部更差。 | inner 0.599283 | 0.586466 | 0.718066 | 1.581632 | +0.000000 | DROP | 0.009 h |
 | L0-008 | L1-001 平均失败但可能存在可识别的互补子集。 | 计算修正候选 oracle、系数 skill 和空间连续性。 | inner oracle 增益 +0.011291；邻点系数 skill 为负。 | oracle 0.610575 | - | - | - | +0.011291 | KEEP FOR STRICT ORACLE | 0.010 h |
 | L0-009 | 新候选与权威 V4 基线的严格 Fold0 oracle 能否跨过 0.65。 | 只训练已选 epoch，统一评估固定候选。 | 完美选择达到 0.656555；所有单候选低于基线。 | oracle 0.656555 | - | - | - | +0.029465 | PROMOTE ROUTER PROBE | 0.014 h |
-| L1-002 | inner OOF gain router 能否学到候选互补性。 | ExtraTrees 预测每个候选相对基线的逐样本收益，保守阈值回退。 | READY | - | - | - | - | - | RUNNING | <=0.05 h |
+| L1-002 | inner OOF gain router 能否学到候选互补性。 | ExtraTrees 预测每个候选相对基线的逐样本收益，保守阈值回退。 | inner OOF 增益 0；router 未过门槛。 | 0.627089 | 0.567081 | 0.758360 | 1.063711 | +0.000000 | DROP | 0.013 h |
+| L0-010 | 归一化复数角时延残差是否存在不同于 AE Detail 的低秩结构。 | Fold0-train OOF teacher 残差拟合 PCA；分别测 magnitude/phase/complex oracle。 | READY | - | - | - | - | - | RUNNING | <=0.25 h |
 
 ## L0 结论
 
@@ -51,3 +52,45 @@ inner 增益低于 `0.004` 时立即 DROP，不以增加 epoch、宽度或扫描
 ### Decision
 
 `DROP`。只允许一次无训练的反事实诊断，确认候选是否具有至少 `+0.010` 的逐样本 oracle 互补性；否则关闭该模型族。
+
+## L1-002
+
+### Hypothesis
+
+仅使用 Fold0-train 内层留出标签训练的保守 Router，可以识别何时用 rank16 残差候选替换 V4 基线。
+
+### Evidence
+
+L0-009 的逐样本真值选择上限为 `0.656555`，相对基线具有 `+0.029465` 的互补空间。
+
+### Minimal Experiment
+
+使用空间 tile 五折 OOF 的 ExtraTrees 回归每个候选相对基线的样本收益；Router 只能读取位置、71 维几何、邻距、seed 统计、候选系数和候选自身功率，不能读取 Fold0 target。
+
+### Expected Signal
+
+内层 OOF 至少增加 `0.004`，才允许把同一个 Router 应用到严格 Fold0。
+
+### Abort Rule
+
+内层 OOF 增益低于 `0.004` 时停止，不增加树深、神经 Router 或参数扫描。
+
+### Result
+
+内层 OOF 最佳阈值为 `0.02`，但 Score 增益为 `0.000000`，`passed=false`。因此没有训练最终 Router；严格 Fold0 仍选择 baseline，PAS=`0.567081`、PDP=`0.758360`、NMSE=`1.063711`、Score=`0.627089`。运行耗时 `46.23` 秒。`0.656555` 仍是使用 Fold0 target 逐样本选候选的不可部署 oracle。
+
+### Interpretation
+
+残差候选在少数样本上有帮助，但这种帮助无法由当前可部署特征在新空间块上预测。继续增加 Router 深度只会重新拟合内层标签，不符合止损规则。
+
+### Decision
+
+`DROP` deployable residual routing。候选只保留作诊断，不再训练更复杂 Router。
+
+### Repository Update
+
+报告：`research/scheme_e_065/L1_002_OOF_ROUTER_FIX.json`；产物：`artifacts/scheme_e_065/l1_002_oof_router_fix/`；修复提交：`3998454`。
+
+### Next Action
+
+执行 L0-010，比较 AE Detail latent 与直接复数角时延残差的 train-only oracle 上限。AE Detail rank128 已知只有 `0.631194`，因此不会再训练 Detail latent predictor。

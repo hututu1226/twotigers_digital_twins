@@ -4,9 +4,8 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | 保守的 inner OOF gain router 能识别何时用 residual candidate 替换 V4。 | strict oracle `0.656555`，增益 `+0.029465`。 | 目标至少 `+0.004`，理想捕获 78% oracle 增益达到 0.65。 | `0.656555`，仅诊断。 | ExtraTrees multi-output gain regression；空间 tile OOF；固定回退阈值。 | <=0.05 h | inner OOF 增益 `<0.004` 或 strict 无改善。 | 达标后复评并物化 prediction；否则 DROP。 |
-| 2 | 当前 seed 的复相位残差存在另一种可部署的低维表示。 | 仅当 L1-001 证明 spectrum 系数不可预测，但误差仍主要来自 NMSE 时再补诊断。 | `+0.004` 到 `+0.015`。 | 待独立 oracle。 | 先做 phase/complex residual oracle，不直接训练。 | <=0.2 h | oracle `<0.65` 或破坏 PAS/PDP。 | 只执行一个最小 probe。 |
-| 3 | 极端高误差样本可由可靠性模型做保守回退。 | 最差 5% 占 67.27% 误差能量。 | `+0.003` 到 `+0.010`。 | 需使用新候选与 baseline 的专家 oracle。 | 新候选产生后先算二专家 oracle，再决定是否训练 gate。 | <=0.2 h | oracle 增益 `<0.010`。 | 只允许 OOF gate。 |
+| 1 | 直接复数角时延残差存在 AE Detail latent 没有保留的低秩结构。 | AE Detail rank128 oracle 仅 `0.631194`；但 NMSE 仍为主要短板。 | 若 oracle 过 0.65，再争取可部署 `+0.004` 到 `+0.015`。 | 待 L0-010。 | Fold0-train OOF 残差 PCA；分别测 magnitude/phase/complex，不训练 predictor。 | <=0.25 h | rank64 最好 oracle `<0.65`。 | 只在过线后执行一个最小系数 Probe。 |
+| 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量，但当前候选 Router OOF 增益为 0。 | `+0.003` 到 `+0.010`。 | 必须先有新的二专家 oracle `>=+0.010`。 | 新候选产生后先算二专家 oracle。 | <=0.2 h | 无新候选或 oracle 增益 `<0.010`。 | 只允许 OOF gate。 |
 
 ## 已 DROP
 
@@ -14,4 +13,6 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 - outage 阈值优化：真值 outage oracle 仅增加 `0.000048`。
 - 单样本复数标量作为主路线：oracle 仅 `0.642992`。
 - rank16 local-set coefficient predictor：inner 平均增益 `0.000000`，所有非零 alpha 均更差。
+- rank16 residual candidate Router：inner spatial OOF 增益 `0.000000`，严格 Fold0 回退到 baseline。
+- AE Detail latent residual：即使 rank128 target-informed oracle 也只有 `0.631194`。
 - 邻居权重、投影轮数、少量 loss 权重和无证据扩容的连续扫描。
