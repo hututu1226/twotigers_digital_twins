@@ -32,6 +32,7 @@ def main() -> None:
     )
     parser.add_argument("--iterations", default="1,2")
     parser.add_argument("--strengths", default="0,0.25,0.5,0.75,1")
+    parser.add_argument("--sources", default="model")
     parser.add_argument(
         "--output", default="reports/generated/v3_output_projection_scan.json"
     )
@@ -113,8 +114,9 @@ def main() -> None:
     print(f"output projection baseline score={baseline['score']:.6f}", flush=True)
     reports: list[dict[str, object]] = []
     strengths = _float_list(args.strengths)
-    for iterations, pair in itertools.product(
-        _int_list(args.iterations), itertools.product(strengths, repeat=2)
+    sources = [value.strip() for value in args.sources.split(",") if value.strip()]
+    for iterations, pair, source in itertools.product(
+        _int_list(args.iterations), itertools.product(strengths, repeat=2), sources
     ):
         values = evaluate_hybrid(
             **common,
@@ -123,12 +125,14 @@ def main() -> None:
                 "strength_by_cell": list(pair),
                 "minimum_scale": 0.5,
                 "maximum_scale": 2.0,
+                "channel_source": source,
             },
         )
         reports.append(values)
         print(
-            "output projection iter=%d strengths=%s score=%.6f pas=%.6f pdp=%.6f nmse=%.6f"
+            "output projection source=%s iter=%d strengths=%s score=%.6f pas=%.6f pdp=%.6f nmse=%.6f"
             % (
+                source,
                 iterations,
                 list(pair),
                 values["score"],

@@ -40,7 +40,11 @@ from scheme_e.reference_context import (
 from scheme_e.rf_geometry import build_rf_gaussians, extract_geometry_features, feature_names
 from scheme_e.spectral_targets import channel_spectral_targets, decode_pas_log, decode_pdp_log
 from scheme_e.splits import spatial_block_folds
-from scheme_e.hybrid_training import _build_model, _validation_mask
+from scheme_e.hybrid_training import (
+    _build_model,
+    _output_projection_seed,
+    _validation_mask,
+)
 from scheme_e.hybrid_model import SpectralGaussianHybrid, StructuredSpectralFieldEncoder
 from scheme_e.local_spectral import local_expert_settings, local_spectral_prediction
 
@@ -140,6 +144,17 @@ def test_pas_projection_uses_mean_pas_target() -> None:
         return (left * right).sum(1) / (left.norm(dim=1) * right.norm(dim=1))
 
     assert torch.all(cosine(projected_mean, target_mean) > cosine(source_mean, target_mean))
+
+
+def test_output_projection_can_start_from_reference_or_transport() -> None:
+    model = torch.full((1, 2, 1, 2), 1.0 + 0.0j)
+    reference = torch.full_like(model, 2.0 + 0.0j)
+    transport = torch.full_like(model, 3.0 + 0.0j)
+    assert _output_projection_seed("model", model, reference, transport) is model
+    assert _output_projection_seed("reference", model, reference, transport) is reference
+    assert _output_projection_seed("transport", model, reference, transport) is transport
+    with np.testing.assert_raises_regex(ValueError, "requires a transport seed"):
+        _output_projection_seed("transport", model, reference, None)
 
 
 def test_structured_spectral_field_preserves_absolute_grid_axes() -> None:
@@ -457,6 +472,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_pas_projection_mean_target(self) -> None:
         test_pas_projection_uses_mean_pas_target()
+
+    def test_output_projection_seed(self) -> None:
+        test_output_projection_can_start_from_reference_or_transport()
 
     def test_structured_spectral_field(self) -> None:
         test_structured_spectral_field_preserves_absolute_grid_axes()

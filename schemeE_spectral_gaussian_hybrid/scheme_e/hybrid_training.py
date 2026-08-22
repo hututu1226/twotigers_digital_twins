@@ -323,6 +323,23 @@ def _reference_context_batch(
 
 
 @torch.no_grad()
+def _output_projection_seed(
+    source: str,
+    model_channel: torch.Tensor,
+    reference_channel: torch.Tensor,
+    transport_channel: torch.Tensor | None,
+) -> torch.Tensor:
+    if source == "model":
+        return model_channel
+    if source == "reference":
+        return reference_channel
+    if source == "transport":
+        if transport_channel is None:
+            raise ValueError("transport output projection requires a transport seed")
+        return transport_channel
+    raise ValueError(f"Unknown output projection channel source: {source}")
+
+
 def evaluate_hybrid(
     model: SpectralGaussianHybrid,
     shape: object,
@@ -410,6 +427,9 @@ def evaluate_hybrid(
     ]
     output_projection = output_projection or {}
     output_projection_iterations = int(output_projection.get("iterations", 0))
+    output_projection_channel_source = str(
+        output_projection.get("channel_source", "model")
+    )
     output_projection_strengths = np.asarray(
         output_projection.get("strength_by_cell", [0.0]), dtype=np.float32
     ).reshape(-1)
@@ -471,13 +491,19 @@ def evaluate_hybrid(
         )
         predicted_channel = outputs["channel"]
         if output_projection_iterations > 0:
+            projection_seed = _output_projection_seed(
+                output_projection_channel_source,
+                predicted_channel,
+                reference,
+                transport_channel,
+            )
             projection_power = (
                 inputs["log_power"]
                 if str(output_projection.get("power_source", "model")) == "input"
                 else outputs["power"]
             )
             predicted_channel = relaxed_output_projection(
-                predicted_channel,
+                projection_seed,
                 inputs["pas_log"],
                 inputs["pdp_log"],
                 inputs["ue_log_energy"],
@@ -535,6 +561,7 @@ def evaluate_hybrid(
             "output_projection_power_source": str(
                 output_projection.get("power_source", "model")
             ),
+            "output_projection_channel_source": output_projection_channel_source,
         }
     )
     if carrier_fit is not None:
