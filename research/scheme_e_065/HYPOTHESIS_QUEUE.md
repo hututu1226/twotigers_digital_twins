@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | 当前 periodic Fold0 与 test 的邻点距离匹配，但 link/environment 域 AUC=`0.9963`；为两个基站独立选择 periodic phase，可能得到更像测试场景的验证洞。 | L0-023 已确认 support-only AUC=`0.5959`、最近距离中位数仅差 `0.380 m`，但五个现有 Fold 的 link/environment AUC 均 `>0.993`。 | 建立更可信的离线决策集，避免继续优化只对 Fold0 有效的方向。 | 不适用；搜索阶段不读任何信道标签。 | 固定 `72 m` tile、`26 m` hole，先按无标签分布签名筛 phase，再对少量组合计算域 AUC。仅当样本 450-650、每 cell>=200、最近距离差<=2m、support AUC<=0.70 且 link AUC 至少下降 0.10 时晋级。 | CPU, <=0.10 h | 最佳组合仍未通过任一固定门槛。 | 通过才允许一次 test-matched V4 复训；否则 DROP periodic-phase matching。 |
+| 1 | 将每个 test 点一对一匹配到同基站最近 train 点，可直接复刻测试点所在空间邻域，比平移周期洞更可能匹配 RF 环境。 | L0-024 的 support AUC 已降至 `0.5512`，但 link/environment AUC 仍为 `0.9939`；主要偏移来自局部墙面法向、BS 距离/方位和走廊密度。 | 建立 500 条、cell 分布与 test 一致的可解释验证集。 | 不适用；匹配阶段不读训练或测试信道。 | 每 cell 用空间距离的最小成本一对一 assignment；移除被匹配 train 点后重新计算 support 和 link/environment AUC。沿用样本/支撑门槛，并要求 link AUC 至少下降 0.10。 | CPU, <=0.05 h | link AUC 仍高于 `0.8963`，或最近支撑中位数差超过 `2 m`。 | 通过才允许一次 matched-split V4 复训；失败则先审计可达的训练几何覆盖，不训练模型。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量；L0-022 二专家 oracle 仅 `0.640268`。 | `+0.003` 到 `+0.010`。 | 新候选需把 oracle 推到 `>0.66`。 | 新候选产生后先算联合 oracle。 | <=0.2 h | oracle `<0.66`。 | 只有过线后才允许严格 OOF gate。 |
 
 ## 已 DROP
@@ -27,6 +27,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 - query-conditioned local-set full-resolution magnitude：inner best epoch0、增益 `0.000000`；所有非零修正显著下降。
 - quality-gated aligned magnitude composition：strict `0.633628`，虽有 `+0.002047` 真增益，但低于固定 `+0.003` 门槛；二专家 oracle 仅 `0.640268`。候选文件保留用于诊断，不作为主路线。
 - 旧 Scheme1 空洞可代表真实测试难度：旧验证最近支撑中位数 `21.594 m`，test 仅 `6.199 m`；该解释已被 L0-023 否定。
+- translated periodic phase matching：L0-024 最佳 support AUC=`0.551188`，但 link/environment AUC 仍为 `0.993904`，只下降 `0.002390`，且样本数仅 437。
 - AE Detail latent residual：即使 rank128 target-informed oracle 也只有 `0.631194`。
 - 邻居权重、投影轮数、少量 loss 权重和无证据扩容的连续扫描。
 

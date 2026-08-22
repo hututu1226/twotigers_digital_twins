@@ -568,3 +568,25 @@ L0-022 在按 test 的 cell/邻点距离重加权后，基线/候选为 `0.62955
 ### Decision
 
 `CONFIRM_ENVIRONMENT_SHIFT / KEEP_L0_022_MINOR_ONLY`。主基线仍为 `0.631581`，官方线上仍为 `0.59`。进入 L0-024：只根据可观测测试几何搜索更匹配的空间验证洞；固定门槛通过后才允许一次 GPU 复训。
+
+## L0-024
+
+### Hypothesis
+
+保持 `72 m` tile 和 `26 m` hole 不变，但让两个基站分别选择 periodic phase，可能在不改变空洞难度的前提下覆盖更接近 test 的 RF 环境。
+
+### Minimal Experiment
+
+完全不读取训练或测试信道。每个基站穷举 `16 x 16=256` 个 phase，先用支撑距离与 link/environment 特征的稳健分布签名选出前 6 个，再严格比较 `6 x 6=36` 个组合的线性/非线性域分类 AUC。固定晋级条件为：总样本 450-650、每 cell 至少 200、最近支撑中位数与 test 相差不超过 `2 m`、support AUC 不超过 `0.70`，并且 link/environment AUC 至少比 `0.996294` 降低 `0.10`。
+
+### Result
+
+搜索耗时 `94.16 s`。最佳 phase 为 BS0=`[31.5,31.5]`、BS1=`[54.0,0.0]`，得到 437 条验证样本，cell 数为 `218/219`。最近支撑中位数 `6.320 m`，与 test 只差 `0.122 m`；support AUC=`0.551188`。但 link/environment AUC 仍为 `0.993904`，只降低 `0.002390`。
+
+### Interpretation
+
+周期洞能很好地控制“最近训练点有多远”，却不能选择测试点特有的墙面法向、基站距离和走廊组合。把整张棋盘平移到任何位置都仍混入大量非测试环境，所以继续增加 phase 分辨率或扫描 tile/hole 没有证据支持。
+
+### Decision
+
+`DROP_PERIODIC_PHASE_MATCHING`。未启动任何 GPU 复训。下一项 L0-025 固定使用 test 到同基站 train 的一对一空间近邻匹配，验证更直接的 test-neighborhood holdout；仍不使用任何测试信道标签。

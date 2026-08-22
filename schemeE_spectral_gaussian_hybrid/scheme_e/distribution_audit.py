@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 from scipy.spatial import cKDTree
 from scipy.stats import ks_2samp, wasserstein_distance
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -365,6 +366,46 @@ def test_matched_holdout_gate(
     if float(link_environment_domain_auc) > required_link_auc:
         reasons.append("link_environment_domain_auc")
     return not reasons, reasons
+
+
+def one_to_one_same_cell_assignment(
+    reference_positions: np.ndarray,
+    reference_cells: np.ndarray,
+    query_positions: np.ndarray,
+    query_cells: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Assign each query to a unique same-cell reference by minimum XY distance."""
+
+    reference_xy = np.asarray(reference_positions, dtype=np.float64)[:, :2]
+    reference_cell = np.asarray(reference_cells, dtype=np.int64)
+    query_xy = np.asarray(query_positions, dtype=np.float64)[:, :2]
+    query_cell = np.asarray(query_cells, dtype=np.int64)
+    if len(reference_xy) != len(reference_cell):
+        raise ValueError("reference positions and cells have different lengths")
+    if len(query_xy) != len(query_cell):
+        raise ValueError("query positions and cells have different lengths")
+    assignment = np.full(len(query_xy), -1, dtype=np.int64)
+    distances = np.full(len(query_xy), np.nan, dtype=np.float64)
+    for cell in np.unique(query_cell):
+        query_rows = np.flatnonzero(query_cell == cell)
+        reference_rows = np.flatnonzero(reference_cell == cell)
+        if len(reference_rows) < len(query_rows):
+            raise ValueError(
+                f"cell {int(cell)} has fewer references than queries: "
+                f"{len(reference_rows)} < {len(query_rows)}"
+            )
+        delta = query_xy[query_rows, None, :] - reference_xy[reference_rows][None, :, :]
+        cost = np.square(delta).sum(axis=2)
+        local_query, local_reference = linear_sum_assignment(cost)
+        selected_query = query_rows[local_query]
+        selected_reference = reference_rows[local_reference]
+        assignment[selected_query] = selected_reference
+        distances[selected_query] = np.sqrt(cost[local_query, local_reference])
+    if np.any(assignment < 0) or not np.isfinite(distances).all():
+        raise RuntimeError("same-cell assignment left unmatched queries")
+    if len(np.unique(assignment)) != len(assignment):
+        raise RuntimeError("same-cell assignment reused a reference")
+    return assignment, distances
 
 
 def legacy_spatial_block_split(

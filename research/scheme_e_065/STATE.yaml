@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: test_matched_spatial_holdout_search
+status: test_neighborhood_holdout_probe
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -15,10 +15,10 @@ best_artifact_paths:
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
   prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  Strict Fold0 matches the test support distance but not its RF-environment
-  distribution; independent per-cell periodic phases may produce a more
-  decision-relevant holdout without using any test channel labels.
-current_experiment: L0-024
+  A one-to-one same-cell assignment from each test position to its nearest
+  training position may reproduce the actual test neighborhood and RF regime
+  better than any translated periodic-hole mask.
+current_experiment: L0-025
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -50,6 +50,7 @@ completed_experiments:
   - L1-006_query_conditioned_local_set_fullres_magnitude_probe
   - L0-022_quality_gated_aligned_magnitude_transfer
   - L0-023_test_geometry_shift_audit
+  - L0-024_test_matched_periodic_holdout_search
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -68,18 +69,19 @@ dropped_families:
   - observed_neighbor_phase_transport
   - query_conditioned_local_set_fullres_magnitude
   - quality_gated_aligned_magnitude_as_primary_route
+  - translated_periodic_phase_matching
 pending_queue:
-  - L0-024_test_matched_periodic_holdout_search
-  - one_test_matched_retrain_only_if_l0_024_fixed_gate_passes
+  - L0-025_test_neighborhood_assignment_holdout
+  - one_test_matched_retrain_only_if_l0_025_fixed_gate_passes
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
 gpu_hours_used: 0.825
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
-  python scripts/search_test_matched_holdout.py --config
+  python scripts/audit_test_neighborhood_holdout.py --config
   configs/v4_attempt1_structured.json
-git_commit: efb0d9a
-last_update_time: 2026-08-22T22:17:00+08:00
+git_commit: 14edf76
+last_update_time: 2026-08-22T22:28:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -137,3 +139,6 @@ notes:
   - L0-023 link/environment domain AUC was 0.996294, showing a major observable RF-regime shift despite matched support difficulty.
   - L0-023 test-distance-reweighted L0-022 gain was only +0.002316; BS0/BS1 strict gains were +0.000184/+0.004139, so the fixed candidate gate still failed.
   - All five original periodic folds had link/environment AUC above 0.993; simply switching Fold0 to another existing fold is not supported.
+  - L0-024 evaluated 256 phases per cell and 36 finalist combinations in 94.16 seconds without reading channel labels.
+  - Its best periodic combination had support AUC 0.551188 and nearest-median gap 0.122 m, but link/environment AUC remained 0.993904.
+  - L0-024 selected only 437 samples and reduced link/environment AUC by just 0.002390 instead of the fixed 0.10 requirement, so periodic phase matching is dropped without retraining.

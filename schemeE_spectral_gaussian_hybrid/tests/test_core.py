@@ -43,6 +43,7 @@ from scheme_e.diagnostics import (
 from scheme_e.distribution_audit import (
     distribution_signature_distance,
     fixed_bin_importance_weights,
+    one_to_one_same_cell_assignment,
     periodic_cell_holdout_mask,
     same_cell_support_features,
     test_matched_holdout_gate,
@@ -981,6 +982,22 @@ def test_distribution_signature_and_holdout_gate() -> None:
     assert reasons == ["cell_balance", "link_environment_domain_auc"]
 
 
+def test_same_cell_assignment_is_unique_and_distance_minimal() -> None:
+    reference = np.asarray(
+        [[0.0, 0.0], [10.0, 0.0], [100.0, 0.0], [110.0, 0.0]]
+    )
+    queries = np.asarray([[1.0, 0.0], [9.0, 0.0], [109.0, 0.0]])
+    indices, distances = one_to_one_same_cell_assignment(
+        reference,
+        np.asarray([0, 0, 1, 1]),
+        queries,
+        np.asarray([0, 0, 1]),
+    )
+    np.testing.assert_array_equal(indices, [0, 1, 3])
+    np.testing.assert_allclose(distances, [1.0, 1.0, 1.0])
+    assert len(np.unique(indices)) == len(indices)
+
+
 class SchemeECoreTests(unittest.TestCase):
     def test_carrier_quality_gate(self) -> None:
         test_carrier_quality_gate_keeps_reliable_fit_and_replaces_weak_fit()
@@ -1113,6 +1130,7 @@ class SchemeECoreTests(unittest.TestCase):
     def test_periodic_holdout_search_helpers(self) -> None:
         test_periodic_holdout_is_cell_scoped_and_phase_sensitive()
         test_distribution_signature_and_holdout_gate()
+        test_same_cell_assignment_is_unique_and_distance_minimal()
 
     def test_final_projection_override_is_declared(self) -> None:
         import inspect
