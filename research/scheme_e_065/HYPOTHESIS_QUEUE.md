@@ -1,12 +1,16 @@
 # Hypothesis Queue
 
-This queue is provisional until Level-0 diagnostics finish. Fold0 targets may be used only for explicitly marked diagnostic oracles, never to fit deployable parameters.
+Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合任何可部署参数。
 
-| Priority | Hypothesis | Evidence needed | Expected gain | Oracle ceiling | Minimal probe | Estimated GPU cost | Failure signal | Follow-up |
+| Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | A deployable power or global complex-scale calibrator can recover a material part of the NMSE loss without damaging PAS/PDP. | Scale oracle improves Score by at least `0.010`, with consistent BS-wise structure. | Primarily NMSE; potentially `+0.005` to `+0.020`. | Pending L0-001. | Fit a per-BS calibrator using Fold0-train OOF predictions only. | 0.1 h | Oracle gain below `0.005`, or OOF calibration harms inner spatial validation. | Promote only if strict Fold0 gains at least `0.004`. |
-| 2 | Existing base and adaptive experts are complementary enough for a simple OOF-trained router. | Diagnostic-only expert oracle exceeds `0.660` and improves baseline by at least `0.010`. | PAS/PDP and hard spatial slices; potentially `+0.005` to `+0.015`. | Pending L0-001. | Logistic or shallow-tree gate on geometry, density, power and disagreement. | 0.2 h | Oracle below `0.650`, oracle gain below `0.005`, or router captures less than one third of oracle gain. | Keep expert only when strict complementarity survives OOF routing. |
-| 3 | Baseline complex residuals have a train-derived low-rank representation that can raise Score beyond `0.65`. | Train-only/OOF residual basis gives a Fold0 diagnostic oracle above `0.660` at practical rank. | Mainly NMSE and PAS; potentially `+0.010` to `+0.030`. | Pending residual-rank audit. | Fixed PCA basis plus a small residual-coefficient MLP on an inner spatial split. | 0.5 h | Rank-128 oracle below `0.650`, or inner spatial validation gain below `0.003`. | Add a scalar confidence gate only after the ungated probe works. |
-| 4 | Query-conditioned local-set features explain errors concentrated in sparse regions and hole centers. | Error Score is strongly related to nearest support distance/density, and local experts show useful oracle complementarity. | PAS/PDP on sparse slices; potentially `+0.006` to `+0.020`. | Pending L0-001. | Small DeepSets encoder predicting only low-dimensional residual coefficients and power correction. | 0.8 h | No spatial error correlation, or inner validation gain below `0.003`. | Consider cross-attention only after DeepSets establishes the mechanism. |
+| 1 | 同基站局部观测集合能预测 rank16 spectrum residual coefficients。 | rank16 oracle `0.679030`；误差与距离/密度相关。 | 主要提升 PAS、PDP 和 NMSE，目标 `+0.004` 到 `+0.020`。 | `0.679030`，仅诊断。 | inner-train-only PCA + 小型 set encoder，保留完整 seed latent。 | <=0.5 h | inner Score 增益 `<0.004`。 | 通过后只做一次严格 Fold0；按 PROMOTE/MODIFY_ONCE/DROP 处理。 |
+| 2 | 当前 seed 的复相位残差存在另一种可部署的低维表示。 | 仅当 L1-001 证明 spectrum 系数不可预测，但误差仍主要来自 NMSE 时再补诊断。 | `+0.004` 到 `+0.015`。 | 待独立 oracle。 | 先做 phase/complex residual oracle，不直接训练。 | <=0.2 h | oracle `<0.65` 或破坏 PAS/PDP。 | 只执行一个最小 probe。 |
+| 3 | 极端高误差样本可由可靠性模型做保守回退。 | 最差 5% 占 67.27% 误差能量。 | `+0.003` 到 `+0.010`。 | 需使用新候选与 baseline 的专家 oracle。 | 新候选产生后先算二专家 oracle，再决定是否训练 gate。 | <=0.2 h | oracle 增益 `<0.010`。 | 只允许 OOF gate。 |
 
-Priority will be recomputed as `expected useful gain x confidence x information value / GPU cost` after Level-0 results are measured.
+## 已 DROP
+
+- 当前四专家 routing：完美 router 也仅 `0.645999`。
+- outage 阈值优化：真值 outage oracle 仅增加 `0.000048`。
+- 单样本复数标量作为主路线：oracle 仅 `0.642992`。
+- 邻居权重、投影轮数、少量 loss 权重和无证据扩容的连续扫描。
