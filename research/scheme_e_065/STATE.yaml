@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: strict_expert_oracle_ready
+status: oof_router_probe_ready
 authoritative_best: 0.627089141574626
 target_score: 0.65000
 official_online_score: 0.59
@@ -14,9 +14,9 @@ best_artifact_paths:
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
 current_hypothesis: >-
-  The rank16 candidates may add at least 0.010 oracle complementarity to the
-  authoritative V4 baseline on strict Fold0.
-current_experiment: L0-009
+  A conservative ExtraTrees gain router trained only on Fold0-train inner
+  holdout labels can recover useful strict candidate complementarity.
+current_experiment: L1-002
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -27,6 +27,7 @@ completed_experiments:
   - L0-007_train_only_low_rank_residual_oracle
   - L1-001_rank16_spectrum_residual_local_set_probe
   - L0-008_rank16_failure_counterfactual
+  - L0-009_strict_rank16_candidate_oracle
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -36,9 +37,9 @@ dropped_families:
   - scalar_power_or_complex_scale_calibration_as_primary_route
   - rank16_local_set_coefficient_prediction
 pending_queue:
-  - L0-009_strict_rank16_candidate_oracle
+  - L1-002_inner_oof_candidate_gain_router
   - phase_or_complex_residual_probe_only_if_L1-001_fails_with_new_evidence
-gpu_hours_used: 0.08
+gpu_hours_used: 0.10
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
@@ -47,10 +48,10 @@ exact_next_command: >-
   --cache-dir ../research/scheme_e_065/residual_rank
   --baseline-prediction ../research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
   --policy reports/generated/v4_attempt1_policy.json --device cuda
-  --output-dir artifacts/scheme_e_065/l0_009_strict_oracle
-  --report ../research/scheme_e_065/L0_009_STRICT_CANDIDATE_ORACLE.json
-git_commit: pending_l0_009_commit
-last_update_time: 2026-08-22T14:48:00+08:00
+  --output-dir artifacts/scheme_e_065/l1_002_oof_router
+  --report ../research/scheme_e_065/L1_002_OOF_ROUTER.json
+git_commit: pending_l1_002_commit
+last_update_time: 2026-08-22T15:00:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -58,3 +59,4 @@ notes:
   - L1-001 fits its inner PCA basis from inner-train only; Fold0 targets are never used for fitting.
   - L1-001 inner Score was 0.599283 at alpha 0 and every nonzero correction was worse.
   - L0-008 inner candidate oracle gained 0.011291; simple neighbor coefficients had negative skill.
+  - L0-009 strict oracle reached 0.656555, but every single residual candidate was below baseline.

@@ -197,6 +197,221 @@ def _coefficient_diagnostics(
     }
 
 
+def _select_metric_arrays(
+    candidates: dict[str, dict[str, np.ndarray]],
+    names: list[str],
+    selection: np.ndarray,
+) -> dict[str, np.ndarray]:
+    rows = np.arange(len(selection))
+    return {
+        field: np.stack([candidates[name][field] for name in names], axis=1)[
+            rows, selection
+        ]
+        for field in next(iter(candidates.values()))
+    }
+
+
+def _router_features(
+    query_raw: np.ndarray,
+    seed_cache: dict[str, np.ndarray],
+    metadata: dict[str, np.ndarray],
+    queries: np.ndarray,
+    support: np.ndarray,
+    model_predictions: np.ndarray,
+    spatial_predictions: dict[str, np.ndarray],
+    candidate_arrays: dict[str, dict[str, np.ndarray]],
+) -> np.ndarray:
+    neighbor_indices = np.empty((len(queries), 16), dtype=np.int64)
+    for cell in np.unique(metadata["train_cells"]):
+        cell_support = support[metadata["train_cells"][support] == cell]
+        rows = np.flatnonzero(metadata["train_cells"][queries] == cell)
+        neighbor_indices[rows] = _tree_neighbors(
+            metadata["train_positions"], cell_support, queries[rows], 16
+        )
+    delta = (
+        metadata["train_positions"][neighbor_indices, :2]
+        - metadata["train_positions"][queries, None, :2]
+    )
+    distances = np.linalg.norm(delta, axis=2)
+    distance_features = np.stack(
+        [
+            distances[:, 0],
+            distances.mean(axis=1),
+            distances[:, -1],
+            distances.std(axis=1),
+        ],
+        axis=1,
+    )
+    seed = seed_cache["spectrum"][queries].astype(np.float32).reshape(
+        len(queries), 64, -1
+    )
+    seed_features = np.concatenate(
+        [seed.mean(axis=2), seed.std(axis=2), np.abs(seed).amax(axis=2)],
+        axis=1,
+    )
+    coefficient_features = np.concatenate(
+        [
+            model_predictions[queries],
+            spatial_predictions["nearest1"][queries],
+            spatial_predictions["mean16"][queries],
+        ],
+        axis=1,
+    )
+    coefficient_norms = np.stack(
+        [
+            np.linalg.norm(model_predictions[queries], axis=1),
+            np.linalg.norm(spatial_predictions["nearest1"][queries], axis=1),
+            np.linalg.norm(spatial_predictions["mean16"][queries], axis=1),
+            np.linalg.norm(
+                model_predictions[queries]
+                - spatial_predictions["nearest1"][queries],
+                axis=1,
+            ),
+            np.linalg.norm(
+                model_predictions[queries]
+                - spatial_predictions["mean16"][queries],
+                axis=1,
+            ),
+        ],
+        axis=1,
+    )
+    prediction_features = []
+    for arrays in candidate_arrays.values():
+        prediction_features.extend(
+            [
+                np.asarray(arrays["prediction_log_power"], dtype=np.float32)[:, None],
+                np.log10(
+                    np.maximum(
+                        np.asarray(arrays["prediction_energy"], dtype=np.float32),
+                        1e-30,
+                    )
+                )[:, None],
+            ]
+        )
+    features = np.concatenate(
+        [
+            query_raw[queries],
+            distance_features,
+            seed_features,
+            coefficient_features,
+            coefficient_norms,
+            *prediction_features,
+        ],
+        axis=1,
+    )
+    return np.nan_to_num(features, nan=0.0, posinf=10.0, neginf=-10.0).astype(
+        np.float32
+    )
+
+
+def _spatial_tile_groups(
+    positions: np.ndarray, cells: np.ndarray, tile_meters: float = 24.0
+) -> np.ndarray:
+    tiles = np.floor(positions[:, :2] / float(tile_meters)).astype(np.int64)
+    keys = np.concatenate([cells.astype(np.int64)[:, None], tiles], axis=1)
+    _, groups = np.unique(keys, axis=0, return_inverse=True)
+    return groups.astype(np.int64)
+
+
+def _fit_router_probe(
+    features: np.ndarray,
+    groups: np.ndarray,
+    candidates: dict[str, dict[str, np.ndarray]],
+    seed: int,
+    minimum_gain: float,
+) -> tuple[dict[str, object], object | None, list[str], float]:
+    from sklearn.ensemble import ExtraTreesRegressor
+    from sklearn.model_selection import GroupKFold
+
+    names = list(candidates)
+    baseline = aggregate_sample_metrics(candidates[names[0]])
+    sample_scores = np.stack(
+        [np.asarray(candidates[name]["sample_score"]) for name in names], axis=1
+    )
+    target_gain = sample_scores[:, 1:] - sample_scores[:, :1]
+    unique_groups = np.unique(groups)
+    splits = min(5, len(unique_groups))
+    if splits < 2:
+        raise ValueError("Router probe requires at least two spatial tile groups")
+    oof_gain = np.zeros_like(target_gain, dtype=np.float64)
+    fold_rows = []
+    for fold, (training, validation) in enumerate(
+        GroupKFold(n_splits=splits).split(features, groups=groups)
+    ):
+        model = ExtraTreesRegressor(
+            n_estimators=300,
+            max_depth=10,
+            min_samples_leaf=6,
+            max_features=0.6,
+            n_jobs=-1,
+            random_state=int(seed) + fold,
+        )
+        model.fit(features[training], target_gain[training])
+        oof_gain[validation] = model.predict(features[validation])
+        fold_rows.append(
+            {
+                "fold": fold,
+                "training_samples": int(len(training)),
+                "validation_samples": int(len(validation)),
+            }
+        )
+    threshold_metrics = {}
+    threshold_selections = {}
+    best_residual = np.argmax(oof_gain, axis=1) + 1
+    predicted_gain = np.max(oof_gain, axis=1)
+    for threshold in (0.0, 0.005, 0.01, 0.02, 0.03, 0.05):
+        selection = np.where(predicted_gain > threshold, best_residual, 0)
+        metrics = aggregate_sample_metrics(
+            _select_metric_arrays(candidates, names, selection)
+        )
+        threshold_metrics[str(threshold)] = metrics
+        threshold_selections[str(threshold)] = selection
+    selected_threshold, selected_metrics = max(
+        threshold_metrics.items(), key=lambda item: float(item[1]["score"])
+    )
+    gain = float(selected_metrics["score"]) - float(baseline["score"])
+    passed = gain >= float(minimum_gain) and float(selected_threshold) >= 0.0
+    report = {
+        "training_target": "per-sample candidate score gain over baseline",
+        "spatial_oof_folds": fold_rows,
+        "threshold_scan": threshold_metrics,
+        "selected_threshold": float(selected_threshold),
+        "baseline_metrics": baseline,
+        "selected_metrics": selected_metrics,
+        "gain": gain,
+        "minimum_gain": float(minimum_gain),
+        "passed": passed,
+        "selection_counts": {
+            name: int(
+                np.sum(threshold_selections[selected_threshold] == index)
+            )
+            for index, name in enumerate(names)
+        },
+    }
+    if not passed:
+        return report, None, names, float(selected_threshold)
+    final_model = ExtraTreesRegressor(
+        n_estimators=500,
+        max_depth=10,
+        min_samples_leaf=6,
+        max_features=0.6,
+        n_jobs=-1,
+        random_state=int(seed) + 100,
+    )
+    final_model.fit(features, target_gain)
+    return report, final_model, names, float(selected_threshold)
+
+
+def _router_selection(
+    model: object,
+    features: np.ndarray,
+    threshold: float,
+) -> np.ndarray:
+    predicted_gain = np.asarray(model.predict(features), dtype=np.float64)
+    best_residual = np.argmax(predicted_gain, axis=1) + 1
+    return np.where(np.max(predicted_gain, axis=1) > threshold, best_residual, 0)
+
+
 def _fit_statistics(
     query_raw: np.ndarray,
     seed_spectrum: np.ndarray,
@@ -858,6 +1073,44 @@ def main() -> None:
             inner_coefficients[nonoutage_rows],
         ),
     }
+    inner_router_candidates = {
+        "baseline": diagnostic_arrays["model_alpha_0.0"],
+        **{
+            name: arrays
+            for name, arrays in diagnostic_arrays.items()
+            if name != "model_alpha_0.0"
+        },
+    }
+    inner_router_features = _router_features(
+        query_raw,
+        seed_cache,
+        metadata,
+        inner_validation,
+        inner_training,
+        inner_predictions,
+        spatial_predictions,
+        inner_router_candidates,
+    )
+    inner_router_groups = _spatial_tile_groups(
+        metadata["train_positions"][inner_validation],
+        metadata["train_cells"][inner_validation],
+    )
+    router_report, router_model, router_names, router_threshold = _fit_router_probe(
+        inner_router_features,
+        inner_router_groups,
+        inner_router_candidates,
+        int(args.seed) + 700,
+        float(args.minimum_inner_gain),
+    )
+    if router_model is not None:
+        import joblib
+
+        joblib.dump(router_model, output_dir / "router.pkl")
+    np.savez_compressed(
+        output_dir / "inner_router_probe.npz",
+        features=inner_router_features,
+        groups=inner_router_groups,
+    )
     selected_alpha, selected_inner = max(
         alpha_metrics.items(), key=lambda item: float(item[1]["score"])
     )
@@ -898,6 +1151,7 @@ def main() -> None:
             "target_informed_candidate_oracle_gain": inner_oracle_gain,
             "average_probe_passed": average_probe_passed,
             "expert_probe_passed": expert_probe_passed,
+            "router_probe": router_report,
         },
         "strict_fold0": None,
         "decision": (
@@ -1100,6 +1354,7 @@ def main() -> None:
     expert_oracle = target_informed_expert_oracle(
         strict_candidate_arrays
     )
+    oracle_selection = np.asarray(expert_oracle["selection"], dtype=np.int16)
     expert_oracle.pop("selection")
     best_single_name, best_single_metrics = max(
         strict_candidate_metrics.items(),
@@ -1107,10 +1362,59 @@ def main() -> None:
     )
     best_single_arrays = strict_candidate_arrays[best_single_name]
     baseline_score = float(baseline_metrics["score"])
-    delta = float(best_single_metrics["score"]) - baseline_score
+    selected_result_name = best_single_name
+    selected_result_metrics = best_single_metrics
+    selected_result_arrays = best_single_arrays
+    strict_router_report = None
+    strict_router_selection = None
+    if router_model is not None:
+        strict_router_features = _router_features(
+            query_raw,
+            seed_cache,
+            metadata,
+            validation,
+            nonoutage_observed,
+            strict_predictions,
+            strict_spatial_predictions,
+            strict_candidate_arrays,
+        )
+        strict_router_selection = _router_selection(
+            router_model, strict_router_features, router_threshold
+        )
+        strict_router_arrays = _select_metric_arrays(
+            strict_candidate_arrays, router_names, strict_router_selection
+        )
+        strict_router_metrics = aggregate_sample_metrics(strict_router_arrays)
+        strict_router_report = {
+            "metrics": strict_router_metrics,
+            "delta": float(strict_router_metrics["score"]) - baseline_score,
+            "threshold": router_threshold,
+            "selection_counts": {
+                name: int(np.sum(strict_router_selection == index))
+                for index, name in enumerate(router_names)
+            },
+            "trained_on_fold0_train_inner_holdout_only": True,
+        }
+        np.savez_compressed(
+            output_dir / "strict_router_diagnostic.npz",
+            features=strict_router_features,
+            selection=strict_router_selection,
+            oracle_selection=oracle_selection,
+        )
+        if float(strict_router_metrics["score"]) > float(
+            selected_result_metrics["score"]
+        ):
+            selected_result_name = "deployable_router"
+            selected_result_metrics = strict_router_metrics
+            selected_result_arrays = strict_router_arrays
+    delta = float(selected_result_metrics["score"]) - baseline_score
     oracle_gain = float(expert_oracle["metrics"]["score"]) - baseline_score
-    strict_output: str | None = str(args.baseline_prediction)
-    if best_single_name != "baseline":
+    strict_output: str | None = (
+        str(args.baseline_prediction)
+        if selected_result_name == "baseline"
+        else None
+    )
+    if selected_result_name == best_single_name and best_single_name != "baseline":
         output_path = output_dir / "Fold0_Residual_Prediction.npy"
         coefficients_for_output, alpha_for_output = strict_candidate_inputs[
             best_single_name
@@ -1142,7 +1446,7 @@ def main() -> None:
     else:
         decision = "DROP"
     np.savez_compressed(
-        output_dir / "Fold0_Per_Sample_Metrics.npz", **best_single_arrays
+        output_dir / "Fold0_Per_Sample_Metrics.npz", **selected_result_arrays
     )
     report.update(
         {
@@ -1150,13 +1454,15 @@ def main() -> None:
             "full_cells": full_reports,
             "strict_fold0": {
                 "best_single_candidate": best_single_name,
-                "metrics": best_single_metrics,
+                "selected_result": selected_result_name,
+                "metrics": selected_result_metrics,
                 "candidate_metrics": strict_candidate_metrics,
                 "authoritative_baseline": baseline_score,
                 "delta": delta,
                 "prediction": strict_output,
                 "expert_oracle": expert_oracle,
                 "expert_oracle_gain": oracle_gain,
+                "deployable_router": strict_router_report,
             },
             "decision": decision,
             "elapsed_seconds": time.perf_counter() - started,
