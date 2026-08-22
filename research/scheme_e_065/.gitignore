@@ -1,0 +1,4 @@
+# Large regenerated diagnostics stay on AutoDL persistent storage or in result archives.
+*.npy
+*.npz
+*.parquet

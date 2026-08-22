@@ -1,0 +1,36 @@
+campaign: scheme_e_strict_fold0_065
+status: level0_audit_ready
+authoritative_best: 0.62705
+target_score: 0.65000
+best_metrics:
+  pas: 0.56696
+  pdp: 0.75838
+  nmse: 1.06373
+best_artifact_paths:
+  config: schemeE_spectral_gaussian_hybrid/configs/v4_fold_best.json
+  checkpoint: schemeE_spectral_gaussian_hybrid/artifacts/v4/fold0_attempt1/hybrid/best.pt
+  policy: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_policy.json
+  projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
+current_hypothesis: null
+current_experiment: L0-001
+completed_experiments: []
+dropped_families:
+  - blind_neighbor_weight_sweeps
+  - blind_projection_iteration_sweeps
+  - blind_epoch_or_width_scaling
+pending_queue:
+  - metric_bridge_and_saved_prediction_reproduction
+  - per_sample_error_mining
+  - existing_expert_oracle
+  - power_and_complex_scale_oracles
+  - train_only_low_rank_residual_oracle
+gpu_hours_used: 0.0
+gpu_budget_hours: 5.0
+exact_next_command: >-
+  cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
+  bash scripts/run_scheme_e_065_level0.sh
+git_commit: pending
+last_update_time: 2026-08-22T00:00:00+08:00
+notes:
+  - Fold0 metrics are offline validation metrics, not the official online score of 0.59.
+  - No new model training is allowed until the 0.62705 baseline passes the saved-NPY reproduction gate.

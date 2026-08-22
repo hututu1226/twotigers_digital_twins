@@ -19,6 +19,14 @@ from scheme_e.gp import (
     convex_mse_weights,
     ensemble_log_power_predictions,
 )
+from scheme_e.diagnostics import (
+    aggregate_sample_metrics,
+    concatenate_metric_batches,
+    sample_metric_batch,
+    scale_oracle_predictions,
+    target_informed_expert_oracle,
+)
+from scheme_e.metrics import ChannelMetricAccumulator
 from scheme_e.power_safety import (
     apply_outage_policy,
     apply_power_calibration,
@@ -74,6 +82,66 @@ def test_spectral_targets_and_projection_are_finite() -> None:
     )
     assert projected.shape == channel.shape
     assert torch.isfinite(projected).all()
+
+
+def test_diagnostic_metrics_match_streaming_evaluator() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(31)
+    target = torch.complex(
+        torch.randn(5, *shape.raw_shape, generator=generator),
+        torch.randn(5, *shape.raw_shape, generator=generator),
+    )
+    target[4] = 0.0
+    prediction = target + 0.2 * torch.complex(
+        torch.randn(5, *shape.raw_shape, generator=generator),
+        torch.randn(5, *shape.raw_shape, generator=generator),
+    )
+    outage = torch.tensor([False, False, False, False, True])
+    batches = [
+        sample_metric_batch(prediction[:2], target[:2], shape, outage[:2]),
+        sample_metric_batch(prediction[2:], target[2:], shape, outage[2:]),
+    ]
+    diagnostic = aggregate_sample_metrics(concatenate_metric_batches(batches))
+    evaluator = ChannelMetricAccumulator(shape)
+    evaluator.update(prediction[:2], target[:2], outage[:2])
+    evaluator.update(prediction[2:], target[2:], outage[2:])
+    streamed = evaluator.compute()
+    for name in ("pas", "pdp", "nmse", "score"):
+        assert abs(float(diagnostic[name]) - float(streamed[name])) < 1e-6
+
+
+def test_scale_oracles_do_not_increase_nmse() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(37)
+    target = torch.complex(
+        torch.randn(3, *shape.raw_shape, generator=generator),
+        torch.randn(3, *shape.raw_shape, generator=generator),
+    )
+    prediction = target * torch.tensor([0.25, 2.0, 1.0j])[:, None, None, None]
+    baseline = sample_metric_batch(prediction, target, shape)
+    for value in scale_oracle_predictions(prediction, target).values():
+        oracle = sample_metric_batch(value, target, shape)
+        assert np.all(oracle.sample_nmse <= baseline.sample_nmse + 1e-8)
+
+
+def test_target_informed_oracle_selects_complementary_experts() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(41)
+    target = torch.complex(
+        torch.randn(4, *shape.raw_shape, generator=generator),
+        torch.randn(4, *shape.raw_shape, generator=generator),
+    )
+    first = target.clone()
+    second = target.clone()
+    first[2:] = 0.0
+    second[:2] = 0.0
+    experts = {
+        "first": sample_metric_batch(first, target, shape).as_dict(),
+        "second": sample_metric_batch(second, target, shape).as_dict(),
+    }
+    oracle = target_informed_expert_oracle(experts)
+    assert float(oracle["metrics"]["score"]) > 0.99999
+    assert oracle["selection_counts"] == {"first": 2, "second": 2}
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -484,6 +552,15 @@ def test_v7_neural_teacher_preserves_full_latent_width() -> None:
 
 
 class SchemeECoreTests(unittest.TestCase):
+    def test_diagnostic_metric_bridge(self) -> None:
+        test_diagnostic_metrics_match_streaming_evaluator()
+
+    def test_diagnostic_scale_oracles(self) -> None:
+        test_scale_oracles_do_not_increase_nmse()
+
+    def test_diagnostic_expert_oracle(self) -> None:
+        test_target_informed_oracle_selects_complementary_experts()
+
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()
 
