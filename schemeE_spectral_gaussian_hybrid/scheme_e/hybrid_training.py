@@ -471,12 +471,17 @@ def evaluate_hybrid(
         )
         predicted_channel = outputs["channel"]
         if output_projection_iterations > 0:
+            projection_power = (
+                inputs["log_power"]
+                if str(output_projection.get("power_source", "model")) == "input"
+                else outputs["power"]
+            )
             predicted_channel = relaxed_output_projection(
                 predicted_channel,
                 inputs["pas_log"],
                 inputs["pdp_log"],
                 inputs["ue_log_energy"],
-                outputs["power"],
+                projection_power,
                 shape,
                 iterations=output_projection_iterations,
                 proxy_count=model.proxy_count,
@@ -527,6 +532,9 @@ def evaluate_hybrid(
             "reference_strategy": str((reference_strategy or {}).get("name", "nearest")),
             "output_projection_iterations": output_projection_iterations,
             "output_projection_strength_by_cell": output_projection_strengths.tolist(),
+            "output_projection_power_source": str(
+                output_projection.get("power_source", "model")
+            ),
         }
     )
     if carrier_fit is not None:
