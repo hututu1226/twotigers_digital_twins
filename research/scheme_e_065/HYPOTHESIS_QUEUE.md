@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | Adaptive Teacher 的粗谱收益需要针对新先验重新适配 Hybrid，旧 Hybrid 才不会覆盖正确信息。 | adaptive coarse PAS `0.66953→0.68143`、PDP `0.84482→0.85934`，但直接送入旧 Hybrid 后最终分 `0.627089→0.624773`。 | 最终 Fold0 至少 `+0.004`，目标进入 M1 `0.635`。 | coarse 指标同时明确改善；最终上限待本实验验证。 | V4 best 初始化；架构、AE、split 不变，只替换 adaptive OOF priors，以 `5e-5` 单次微调。 | <=1.25 h | 最佳 Fold0 不超过 baseline `+0.004`，或训练只恢复旧分且 coarse 优势仍消失。 | 过 M1 后保存完整里程碑并研究与 local-transfer 专家的新 oracle。 |
+| 1 | L0-012 的互补性被角度/时延错位掩盖，使用可观测 Teacher profiles 对齐邻点 residual 可保留 PAS。 | 未对齐迁移使 PAS `0.567081→0.555455`，但二专家 oracle 仍达到 `0.646686`；说明候选有不同正确样本而整体角结构受损。 | 候选 strict 提升到 `>=0.620`，且 V4+候选 oracle 超过 `0.65`。 | 未对齐二专家 oracle `0.646686`。 | 固定 k8/0.25，仅增加 Teacher-derived angle/delay circular shift，不训练模型。 | <=0.1 h | inner 仍低于未对齐候选，或新 oracle 仍 `<0.65`。 | 只有 oracle `>0.66` 才允许 OOF Router。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量，但当前候选 Router OOF 增益为 0。 | `+0.003` 到 `+0.010`。 | 必须先有新的二专家 oracle `>=+0.010`。 | 新候选产生后先算二专家 oracle。 | <=0.2 h | 无新候选或 oracle 增益 `<0.010`。 | 只允许 OOF gate。 |
 
 ## 已 DROP
@@ -17,5 +17,6 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 - rank8 magnitude coefficient GP：inner gain=`-0.019753`，系数 skill=`-1.133`。
 - query-only full-resolution magnitude CNN：一次 metric-aligned 修改后 inner 最佳仍为 epoch0。
 - 未对齐的 local full-resolution residual 直接迁移：strict `0.615896`；仅作为互补专家保留。
+- adaptive-prior Hybrid fine-tune：best epoch1，canonical strict `0.621198`。
 - AE Detail latent residual：即使 rank128 target-informed oracle 也只有 `0.631194`。
 - 邻居权重、投影轮数、少量 loss 权重和无证据扩容的连续扫描。

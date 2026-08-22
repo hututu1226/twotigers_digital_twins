@@ -46,6 +46,7 @@ from scheme_e.magnitude_refiner import (
     normalize_log_power_grid,
 )
 from scheme_e.local_magnitude import (
+    estimate_magnitude_profile_shifts,
     same_cell_neighbors,
     transfer_log_power_residual,
 )
@@ -338,6 +339,23 @@ def test_local_magnitude_transfer_uses_same_cell_residuals() -> None:
         strength=0.5,
     )
     np.testing.assert_allclose(transferred[:, 0, 0], np.asarray([2.0, 3.0]))
+
+
+def test_magnitude_profile_alignment_recovers_known_roll() -> None:
+    source_power = np.zeros((1, 1, 4, 6, 16), dtype=np.float32)
+    source_power[0, 0, 1, 2, 4] = 3.0
+    source_power[0, 0, 2, 4, 7] = 1.0
+    query_power = np.roll(source_power, (1, -2, 3), axis=(2, 3, 4))
+    source_log = np.log1p(4.0 * source_power)[:, None]
+    query_log = np.log1p(4.0 * query_power)
+    shifts = estimate_magnitude_profile_shifts(
+        query_log,
+        source_log,
+        maximum_vertical_shift=2,
+        maximum_horizontal_shift=3,
+        maximum_delay_shift=5,
+    )
+    np.testing.assert_array_equal(shifts[0, 0], np.asarray([1, -2, 3]))
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -780,6 +798,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_local_magnitude_transfer(self) -> None:
         test_local_magnitude_transfer_uses_same_cell_residuals()
+
+    def test_magnitude_profile_alignment(self) -> None:
+        test_magnitude_profile_alignment_recovers_known_roll()
 
     def test_adaptive_hybrid_config_is_scoped(self) -> None:
         base = {

@@ -21,6 +21,7 @@ from scheme_e.diagnostics import (
 )
 from scheme_e.hybrid_training import load_hybrid_checkpoint
 from scheme_e.local_magnitude import (
+    estimate_magnitude_profile_shifts,
     same_cell_neighbors,
     transfer_log_power_residual,
 )
@@ -79,19 +80,32 @@ def _evaluate_transfer(
     device: torch.device,
     batch_size: int,
     log_power_scale: float,
+    aligned: bool,
 ) -> dict[str, np.ndarray]:
     batches = []
     for start in range(0, len(indices), int(batch_size)):
         stop = min(start + int(batch_size), len(indices))
         selected = indices[start:stop]
         local_neighbors = neighbors[start:stop]
+        query_base = np.array(base_cache[selected], copy=True)
+        neighbor_base = np.array(base_cache[local_neighbors], copy=True)
+        shifts = (
+            estimate_magnitude_profile_shifts(
+                query_base,
+                neighbor_base,
+                scale=float(log_power_scale),
+            )
+            if bool(aligned) and float(strength) != 0.0
+            else None
+        )
         predicted_log = transfer_log_power_residual(
-            np.array(base_cache[selected], copy=True),
-            np.array(base_cache[local_neighbors], copy=True),
+            query_base,
+            neighbor_base,
             np.array(target_cache[local_neighbors], copy=True),
             distances[start:stop],
             count=int(count),
             strength=float(strength),
+            shifts=shifts,
         )
         seed = _decode_seed(latent_cache, selected, autoencoder, device)
         predicted_shape = replace_angle_delay_log_power(
@@ -208,6 +222,8 @@ def main() -> None:
     )
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--log-power-scale", type=float, default=4.0)
+    parser.add_argument("--aligned", action="store_true")
+    parser.add_argument("--experiment-id", default="L0-012")
     parser.add_argument("--device", choices=("auto", "cuda"), default="auto")
     args = parser.parse_args()
     started = time.perf_counter()
@@ -284,6 +300,7 @@ def main() -> None:
             device,
             int(args.batch_size),
             float(args.log_power_scale),
+            bool(args.aligned),
         )
         metrics = aggregate_sample_metrics(inner_arrays[name])
         print(
@@ -332,6 +349,7 @@ def main() -> None:
             device,
             int(args.batch_size),
             float(args.log_power_scale),
+            bool(args.aligned),
         )
     v4_arrays = _evaluate_saved_prediction(
         args.baseline_prediction,
@@ -370,7 +388,10 @@ def main() -> None:
         "status": "COMPLETED",
         "diagnostic_only_oracle": True,
         "hypothesis": (
-            "Full-resolution OOF Teacher magnitude residuals are locally transferable "
+            "Teacher-profile alignment makes nearby full-resolution OOF magnitude "
+            "residuals transferable without destroying angular structure."
+            if bool(args.aligned)
+            else "Full-resolution OOF Teacher magnitude residuals are locally transferable "
             "within each base station and can expose useful neighborhood context."
         ),
         "git_commit": subprocess.check_output(
@@ -394,6 +415,13 @@ def main() -> None:
             "inner_nearest_p90": float(np.quantile(inner_distances[:, 0], 0.9)),
             "strict_nearest_mean": float(strict_distances[:, 0].mean()),
             "strict_nearest_p90": float(np.quantile(strict_distances[:, 0], 0.9)),
+        },
+        "alignment": {
+            "enabled": bool(args.aligned),
+            "maximum_vertical_shift": 2,
+            "maximum_horizontal_shift": 4,
+            "maximum_delay_shift": 12,
+            "source": "query and neighbor OOF Teacher magnitudes only",
         },
         "inner_metrics": {
             name: aggregate_sample_metrics(values) for name, values in inner_arrays.items()
@@ -421,7 +449,7 @@ def main() -> None:
     report_path = Path(args.report)
     save_json(report_path, report)
     report_path.with_suffix(".md").write_text(
-        "# L0-012 Local Magnitude Transfer\n\n"
+        f"# {args.experiment_id} Local Magnitude Transfer\n\n"
         "Fold0 is offline validation, not the official online score.\n\n"
         f"- Inner-selected global strategy: `{selected_global}`\n"
         f"- Inner-selected per-cell strategies: `{report['selection']['per_cell']}`\n"

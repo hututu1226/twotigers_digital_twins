@@ -21,7 +21,8 @@
 | L1-004 | 完整能量图上的局部卷积修复能否避开不稳定的全局 PCA 坐标。 | OOF Teacher log-power 图输入；3D depthwise residual CNN；71维几何 FiLM；零初始化残差。 | PAS/NMSE 改善，PDP 小幅退化，净增 +0.001211。 | inner 0.599955 | 0.590019 | 0.716790 | 1.589615 | +0.001211 | MODIFY_ONCE | 0.101 h |
 | L1-005 | 直接约束角度/时延能量边缘能否保住 L1-004 收益并修复 PDP。 | 模型、数据、采样均不变；仅增加固定权重的 PAS/PDP proxy cosine loss。 | best epoch0，所有修正均低于基线。 | inner 0.598744 | 0.586458 | 0.718097 | 1.600037 | +0.000000 | DROP | 0.064 h |
 | L0-012 | 邻近观测点的完整 Teacher 幅度误差是否可直接迁移到查询点。 | 同 BS 最近 1/4/8 个点的 target-minus-OOF-teacher log-power 残差；只在 inner split 选固定强度。 | 直接候选退化，但与 V4 的二专家 oracle 提升 0.019597。 | 0.615896 | 0.555455 | 0.764117 | 1.270997 | -0.011193 | KEEP_AS_EXPERT | 0.028 h |
-| L2-001 | 已提升的 adaptive Teacher 需要重新适配 Hybrid 才能把粗谱收益传到最终信道。 | V4 架构和 AE 不变；以 V4 best 初始化，只替换 leakage-safe adaptive OOF priors 并低学习率微调。 | READY | - | - | - | - | - | RUNNING | <=1.25 h |
+| L2-001 | 已提升的 adaptive Teacher 需要重新适配 Hybrid 才能把粗谱收益传到最终信道。 | V4 架构和 AE 不变；以 V4 best 初始化，只替换 leakage-safe adaptive OOF priors 并低学习率微调。 | best epoch1，之后验证持续下降。 | 0.621198 | 0.560096 | 0.754747 | 1.099510 | -0.005891 | DROP | 0.209 h |
+| L0-013 | Teacher profile 对齐能否修复 L0-012 未对齐迁移造成的 PAS 损失。 | 仅增加由 query/neighbor Teacher 估计的离散角度/时延 circular shift；固定 k8、strength0.25。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
 
 ## L0 结论
 
@@ -260,3 +261,21 @@ inner 选择 `k8, strength=0.25`，但严格 Fold0 仅为 PAS=`0.555455`、PDP=`
 ### Next Action
 
 执行 L2-001。adaptive Teacher 的 coarse PAS/PDP 已有独立严格提升，验证针对新先验微调 Hybrid 能否修复此前的 metric bridge 损失。
+
+## L2-001
+
+### Result
+
+训练期最佳为 epoch1，原始 Score=`0.615161`；固定使用 V4 outage policy 后统一复评为 PAS=`0.560096`、PDP=`0.754747`、NMSE=`1.099510`、Score=`0.621198`，比 V4 低 `0.005891`。BS0=`0.676158`，BS1=`0.566855`。训练与最终投影复评共 752.90 秒，产物已备份到 `/root/autodl-fs/scheme_e_065_l2_001`。
+
+### Interpretation
+
+旧 Hybrid 对 adaptive priors 的分布偏移确实敏感，但低学习率微调没有恢复 coarse Teacher 的收益，反而从首轮起继续下降。说明损失不是简单的“网络没适配”，而是 coarse PAS/PDP 改善与最终 phase/latent 目标不一致。
+
+### Decision
+
+`DROP`。不再对 adaptive Hybrid 重训、改学习率或增加 epoch。
+
+### Next Action
+
+执行 L0-013：只对 L0-012 的邻点残差增加可观测 Teacher profile 对齐，验证 PAS 损失是否来自角度/时延错位。

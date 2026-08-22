@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: adaptive_teacher_hybrid_finetune_ready
+status: aligned_local_magnitude_transfer_ready
 authoritative_best: 0.627089141574626
 target_score: 0.65000
 official_online_score: 0.59
@@ -14,10 +14,10 @@ best_artifact_paths:
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
 current_hypothesis: >-
-  The leakage-safe adaptive Teacher's measured coarse PAS/PDP gains are lost
-  because the V4 Hybrid was trained on the old prior distribution; fine-tuning
-  the unchanged Hybrid on adaptive OOF priors restores that metric bridge.
-current_experiment: L2-001
+  The local residual expert is complementary but loses PAS because neighbor
+  angle-delay structures move across space; aligning residuals with observable
+  query/neighbor Teacher profiles preserves the complementary correction.
+current_experiment: L0-013
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -36,6 +36,7 @@ completed_experiments:
   - L1-004_full_resolution_magnitude_refiner_probe
   - L1-005_metric_aligned_full_resolution_refiner
   - L0-012_local_magnitude_residual_transfer
+  - L2-001_adaptive_teacher_conditioned_hybrid_finetune
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -47,17 +48,18 @@ dropped_families:
   - rank16_residual_candidate_routing
   - rank8_magnitude_coefficient_gp_regression
   - query_only_full_resolution_magnitude_refiner
+  - adaptive_teacher_conditioned_hybrid_finetune
 pending_queue:
-  - L2-001_adaptive_teacher_conditioned_hybrid_finetune
+  - L0-013_teacher_profile_aligned_local_magnitude_transfer
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.331
+gpu_hours_used: 0.540
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_adaptive_hybrid.sh
-git_commit: pending_l2_001_commit
-last_update_time: 2026-08-22T17:40:00+08:00
+  bash scripts/run_scheme_e_065_aligned_magnitude_transfer.sh
+git_commit: pending_l0_013_commit
+last_update_time: 2026-08-22T18:10:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -83,3 +85,4 @@ notes:
   - L1-005 best_epoch was 0 with exactly zero inner gain; the targeted loss modification failed and the family is dropped.
   - L0-012 strict candidate scored 0.615896, but its V4 two-expert diagnostic oracle reached 0.646686 (+0.019597).
   - L0-012 is kept as an expert only; oracle remains below 0.65, so complex routing is not promoted.
+  - L2-001 canonical Fold0 was 0.621198 at best epoch1; adaptive Hybrid fine-tuning is dropped.
