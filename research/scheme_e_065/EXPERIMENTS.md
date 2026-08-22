@@ -11,7 +11,8 @@
 | L0-005 | 现有专家可通过 router 跨过 0.65。 | 四专家逐样本 oracle。 | 完美选择也只有 0.645999。 | 0.645999 | 0.593940 | 0.777602 | 1.053769 | +0.018910 | DROP routing | ~0.01 h |
 | L0-006 | outage 误判是主要瓶颈。 | 真值 outage 硬置零 oracle。 | 只增加 0.000048。 | 0.627137 | ~same | ~same | 1.062697 | +0.000048 | DROP | ~0.01 h |
 | L0-007 | 频谱 latent 残差存在可预测的低秩结构。 | Fold0-train-only PCA；Fold0 target 仅提供 oracle 系数。 | Baseline rank16 spectrum oracle 达 0.679030。 | 0.679030 | - | - | - | +0.051940 | PROMOTE TO L1 | ~0.02 h |
-| L1-001 | 局部观测集合能够预测 rank16 频谱残差系数。 | 保留完整 seed latent，只预测 16 维修正。 | READY | - | - | - | - | - | RUNNING | <=0.5 h |
+| L1-001 | 局部观测集合能够预测 rank16 频谱残差系数。 | 保留完整 seed latent，只预测 16 维修正。 | 非零 alpha 全部更差。 | inner 0.599283 | 0.586466 | 0.718066 | 1.581632 | +0.000000 | DROP | 0.009 h |
+| L0-008 | L1-001 平均失败但可能存在可识别的互补子集。 | 计算修正候选 oracle、系数 skill 和空间连续性。 | READY | - | - | - | - | - | RUNNING | <=0.02 h |
 
 ## L0 结论
 
@@ -40,3 +41,11 @@ inner holdout 上 residual 系数 loss 稳定下降、有效邻居数不塌缩�
 ### Abort Rule
 
 inner 增益低于 `0.004` 时立即 DROP，不以增加 epoch、宽度或扫描参数为理由继续。
+
+### Result
+
+模型在训练集上迅速拟合，但 inner validation loss 从 cell0 的 `0.370353` 上升到约 `0.45`，cell1 也未稳定改善。alpha `0.25/0.5/0.75/1.0` 的 Score 均低于不修正的 `0.599283`，因此没有进入严格 Fold0。
+
+### Decision
+
+`DROP`。只允许一次无训练的反事实诊断，确认候选是否具有至少 `+0.010` 的逐样本 oracle 互补性；否则关闭该模型族。

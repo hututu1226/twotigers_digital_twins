@@ -161,6 +161,45 @@ def _fold_excluded_neighbors(
     return output
 
 
+def _neighbor_coefficient_prediction(
+    metadata: dict[str, np.ndarray],
+    support: np.ndarray,
+    queries: np.ndarray,
+    coefficients: np.ndarray,
+    count: int,
+) -> np.ndarray:
+    output = np.zeros((len(metadata["train_cells"]), coefficients.shape[1]), dtype=np.float32)
+    for cell in np.unique(metadata["train_cells"]):
+        cell_support = support[metadata["train_cells"][support] == cell]
+        cell_queries = queries[metadata["train_cells"][queries] == cell]
+        neighbors = _tree_neighbors(
+            metadata["train_positions"], cell_support, cell_queries, count
+        )
+        output[cell_queries] = coefficients[neighbors].mean(axis=1)
+    return output
+
+
+def _coefficient_diagnostics(
+    prediction: np.ndarray,
+    target: np.ndarray,
+) -> dict[str, float]:
+    difference_energy = float(
+        np.square(prediction.astype(np.float64) - target.astype(np.float64)).sum()
+    )
+    zero_energy = float(np.square(target.astype(np.float64)).sum())
+    centered_target = target.astype(np.float64) - target.mean(axis=0, keepdims=True)
+    variance = float(np.square(centered_target).sum())
+    correlation = float(
+        np.corrcoef(prediction.reshape(-1), target.reshape(-1))[0, 1]
+    )
+    return {
+        "mse": difference_energy / max(target.size, 1),
+        "skill_vs_zero": 1.0 - difference_energy / max(zero_energy, 1e-30),
+        "r2_vs_holdout_mean": 1.0 - difference_energy / max(variance, 1e-30),
+        "pearson_flat": correlation,
+    }
+
+
 def _fit_statistics(
     query_raw: np.ndarray,
     seed_spectrum: np.ndarray,
@@ -747,8 +786,9 @@ def main() -> None:
         )
 
     alpha_metrics = {}
+    diagnostic_arrays: dict[str, dict[str, np.ndarray]] = {}
     for alpha in (0.0, 0.25, 0.5, 0.75, 1.0):
-        metrics, _ = _decode_metrics(
+        metrics, arrays = _decode_metrics(
             inner_validation,
             inner_predictions[inner_validation],
             seed_cache,
@@ -765,6 +805,62 @@ def main() -> None:
             outage_strengths,
         )
         alpha_metrics[str(alpha)] = metrics
+        diagnostic_arrays[f"model_alpha_{alpha}"] = arrays
+    spatial_predictions = {
+        "nearest1": _neighbor_coefficient_prediction(
+            metadata,
+            inner_training,
+            inner_validation,
+            inner_coefficients,
+            1,
+        ),
+        "mean16": _neighbor_coefficient_prediction(
+            metadata,
+            inner_training,
+            inner_validation,
+            inner_coefficients,
+            int(args.neighbors),
+        ),
+    }
+    spatial_metrics: dict[str, dict[str, dict[str, float | int]]] = {}
+    for name, prediction in spatial_predictions.items():
+        spatial_metrics[name] = {}
+        for alpha in (0.25, 0.5, 1.0):
+            metrics, arrays = _decode_metrics(
+                inner_validation,
+                prediction[inner_validation],
+                seed_cache,
+                inner_bases,
+                metadata,
+                priors,
+                channels,
+                autoencoder,
+                shape,
+                device,
+                int(args.decode_batch_size),
+                alpha,
+                outage_thresholds,
+                outage_strengths,
+            )
+            spatial_metrics[name][str(alpha)] = metrics
+            diagnostic_arrays[f"{name}_alpha_{alpha}"] = arrays
+    inner_oracle = target_informed_expert_oracle(diagnostic_arrays)
+    inner_oracle.pop("selection")
+    nonoutage_rows = inner_validation_nonoutage
+    coefficient_diagnostics = {
+        "model": _coefficient_diagnostics(
+            inner_predictions[nonoutage_rows],
+            inner_coefficients[nonoutage_rows],
+        ),
+        "nearest1": _coefficient_diagnostics(
+            spatial_predictions["nearest1"][nonoutage_rows],
+            inner_coefficients[nonoutage_rows],
+        ),
+        "mean16": _coefficient_diagnostics(
+            spatial_predictions["mean16"][nonoutage_rows],
+            inner_coefficients[nonoutage_rows],
+        ),
+    }
     selected_alpha, selected_inner = max(
         alpha_metrics.items(), key=lambda item: float(item[1]["score"])
     )
@@ -787,6 +883,13 @@ def main() -> None:
             "selected_score": float(selected_inner["score"]),
             "gain": inner_gain,
             "minimum_gain": float(args.minimum_inner_gain),
+            "spatial_diagnostic_metrics": spatial_metrics,
+            "coefficient_diagnostics": coefficient_diagnostics,
+            "target_informed_candidate_oracle": inner_oracle,
+            "target_informed_candidate_oracle_gain": (
+                float(inner_oracle["metrics"]["score"])
+                - float(inner_baseline["score"])
+            ),
         },
         "strict_fold0": None,
         "decision": "DROP" if not probe_passed else "PENDING_FULL_PROBE",
