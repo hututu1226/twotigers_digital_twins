@@ -9,8 +9,10 @@ from scheme_e.angle_delay import ChannelShape
 from scheme_e.adaptive_experiment import adaptive_hybrid_config
 from scheme_e.autoencoder import FactorizedResidualAutoencoder
 from scheme_e.carrier_transport import (
+    CarrierFit,
     TRANSPORT_CONTEXT_DIM,
     build_transport_seed,
+    quality_gated_carrier_fit,
     select_transport_candidates,
 )
 from scheme_e.complex_residual import (
@@ -87,6 +89,19 @@ from scheme_e.residual_set_model import (
 
 def _shape() -> ChannelShape:
     return ChannelShape(m=8, m_h=2, m_v=2, m_p=2, n=2, s=8)
+
+
+def test_carrier_quality_gate_keeps_reliable_fit_and_replaces_weak_fit() -> None:
+    fit = CarrierFit(
+        wave_numbers=np.asarray([-140.4, -146.1], dtype=np.float64),
+        qualities=np.asarray([0.78, 0.12], dtype=np.float64),
+        pair_counts=np.asarray([1024, 1024], dtype=np.int64),
+    )
+    gated = quality_gated_carrier_fit(fit, -140.33, minimum_quality=0.5)
+    np.testing.assert_allclose(gated.wave_numbers, [-140.4, -140.33])
+    np.testing.assert_array_equal(gated.qualities, fit.qualities)
+    np.testing.assert_array_equal(gated.pair_counts, fit.pair_counts)
+    assert gated.wave_numbers is not fit.wave_numbers
 
 
 def test_spectral_targets_and_projection_are_finite() -> None:
@@ -766,6 +781,9 @@ def test_v7_neural_teacher_preserves_full_latent_width() -> None:
 
 
 class SchemeECoreTests(unittest.TestCase):
+    def test_carrier_quality_gate(self) -> None:
+        test_carrier_quality_gate_keeps_reliable_fit_and_replaces_weak_fit()
+
     def test_diagnostic_metric_bridge(self) -> None:
         test_diagnostic_metrics_match_streaming_evaluator()
 

@@ -279,3 +279,39 @@ inner 选择 `k8, strength=0.25`，但严格 Fold0 仅为 PAS=`0.555455`、PDP=`
 ### Next Action
 
 执行 L0-013：只对 L0-012 的邻点残差增加可观测 Teacher profile 对齐，验证 PAS 损失是否来自角度/时延错位。
+
+## L0-013
+
+### Result
+
+Teacher profile 对齐后的局部残差候选为 PAS=`0.559358`、PDP=`0.764518`、NMSE=`1.271590`、Score=`0.617594`。相对未对齐候选提高 `0.001698`，但仍比 V4 低 `0.009495`。V4 与该候选的逐样本诊断 oracle 为 `0.648161`，选择 V4 317 个样本、局部候选 248 个样本。实验耗时 `54.02` 秒。
+
+### Interpretation
+
+可观测频谱对齐确实修复了一部分角度错位，但局部幅度残差整体仍不可直接迁移。二专家 oracle 也没有越过 `0.65`，更未达到训练 Router 所要求的 `0.66`，因此继续微调邻居数、shift 范围或修正强度没有足够上限依据。
+
+### Decision
+
+`KEEP_AS_EXPERT`，停止该模型族的继续调参，不训练 Router。
+
+### Next Action
+
+执行 L0-014。初赛稳定使用全局载波斜率约 `-140.33 rad/m`；当前 BS1 拟合为 `-146.067` 且质量仅 `0.124`。固定规则为拟合质量低于 `0.5` 时回退到初赛先验，不使用 Fold0 target 选择阈值。
+
+## L0-014
+
+### Hypothesis
+
+低相干度的单基站载波拟合落入了周期别名；对低质量拟合回退到初赛验证过的全局载波先验，可以改善 BS1 transport seed 和最终信道。
+
+### Minimal Experiment
+
+不训练模型、不扫描阈值。保留 BS0 的高质量拟合；BS1 因质量低于固定门槛 `0.5`，将 `-146.067` 回退为 `-140.33`。先复现严格 Fold0 基线，再使用相同 checkpoint、Teacher、outage policy 和投影设置只替换 carrier fit。
+
+### Expected Signal
+
+严格 Fold0 Score 至少增加 `0.0005`，且增益主要来自 BS1；否则立即 DROP，不扫描更多斜率。
+
+### Leakage Control
+
+载波拟合只来自 Fold0-train；回退先验来自初赛程序；规则在查看本实验 Fold0 结果前固定。Fold0 target 只计算最终指标。

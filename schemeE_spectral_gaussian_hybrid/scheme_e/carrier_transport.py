@@ -24,6 +24,24 @@ class CarrierFit:
         }
 
 
+def quality_gated_carrier_fit(
+    fit: CarrierFit,
+    prior_wave_number: float,
+    minimum_quality: float = 0.5,
+) -> CarrierFit:
+    """Fall back to the carrier prior when a per-cell fit is not coherent enough."""
+    wave_numbers = np.asarray(fit.wave_numbers, dtype=np.float64)
+    qualities = np.asarray(fit.qualities, dtype=np.float64)
+    pair_counts = np.asarray(fit.pair_counts, dtype=np.int64)
+    if not (wave_numbers.shape == qualities.shape == pair_counts.shape):
+        raise ValueError("Carrier fit arrays must have identical shapes")
+    if not 0.0 <= float(minimum_quality) <= 1.0:
+        raise ValueError("minimum_quality must be between zero and one")
+    reliable = np.isfinite(qualities) & (qualities >= float(minimum_quality))
+    selected = np.where(reliable, wave_numbers, float(prior_wave_number))
+    return CarrierFit(selected, qualities.copy(), pair_counts.copy())
+
+
 def _alignment_quality(
     wave_numbers: np.ndarray,
     range_deltas: np.ndarray,

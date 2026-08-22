@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: aligned_local_magnitude_transfer_ready
+status: carrier_quality_fallback_ready
 authoritative_best: 0.627089141574626
 target_score: 0.65000
 official_online_score: 0.59
@@ -14,10 +14,9 @@ best_artifact_paths:
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
 current_hypothesis: >-
-  The local residual expert is complementary but loses PAS because neighbor
-  angle-delay structures move across space; aligning residuals with observable
-  query/neighbor Teacher profiles preserves the complementary correction.
-current_experiment: L0-013
+  The BS1 carrier fit has very low coherence and should fall back to the stable
+  Round1 global carrier prior instead of moving the transport seed to an alias.
+current_experiment: L0-014
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -37,6 +36,7 @@ completed_experiments:
   - L1-005_metric_aligned_full_resolution_refiner
   - L0-012_local_magnitude_residual_transfer
   - L2-001_adaptive_teacher_conditioned_hybrid_finetune
+  - L0-013_teacher_profile_aligned_local_magnitude_transfer
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -50,16 +50,17 @@ dropped_families:
   - query_only_full_resolution_magnitude_refiner
   - adaptive_teacher_conditioned_hybrid_finetune
 pending_queue:
-  - L0-013_teacher_profile_aligned_local_magnitude_transfer
+  - L0-014_carrier_quality_fallback
+  - round1_marginal_spectral_projection_expert_if_l0_014_fails
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.540
+gpu_hours_used: 0.555
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_aligned_magnitude_transfer.sh
-git_commit: pending_l0_013_commit
-last_update_time: 2026-08-22T18:10:00+08:00
+  bash scripts/run_scheme_e_065_carrier_fallback.sh
+git_commit: pending_l0_014_commit
+last_update_time: 2026-08-22T18:40:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -86,3 +87,6 @@ notes:
   - L0-012 strict candidate scored 0.615896, but its V4 two-expert diagnostic oracle reached 0.646686 (+0.019597).
   - L0-012 is kept as an expert only; oracle remains below 0.65, so complex routing is not promoted.
   - L2-001 canonical Fold0 was 0.621198 at best epoch1; adaptive Hybrid fine-tuning is dropped.
+  - L0-013 aligned local transfer scored 0.617594; alignment recovered 0.001698 over the unaligned candidate but remained below V4.
+  - L0-013 V4+local target-informed oracle reached 0.648161, still below both the 0.65 target and the 0.66 Router promotion threshold.
+  - Round1 used a stable global carrier slope near -140.33; the current BS1 fit is -146.067 with quality only 0.124 versus BS0 quality 0.784.
