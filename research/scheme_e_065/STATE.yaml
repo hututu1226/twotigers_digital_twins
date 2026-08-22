@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: test_neighborhood_holdout_probe
+status: paused_by_user_after_l0_025
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -15,10 +15,10 @@ best_artifact_paths:
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
   prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  A one-to-one same-cell assignment from each test position to its nearest
-  training position may reproduce the actual test neighborhood and RF regime
-  better than any translated periodic-hole mask.
-current_experiment: L0-025
+  Direct test-neighborhood matching improves observable RF-domain similarity,
+  but the remaining shift is too large to justify a matched-split retrain under
+  the preregistered gate.
+current_experiment: null
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -51,6 +51,7 @@ completed_experiments:
   - L0-022_quality_gated_aligned_magnitude_transfer
   - L0-023_test_geometry_shift_audit
   - L0-024_test_matched_periodic_holdout_search
+  - L0-025_test_neighborhood_assignment_holdout
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -70,18 +71,16 @@ dropped_families:
   - query_conditioned_local_set_fullres_magnitude
   - quality_gated_aligned_magnitude_as_primary_route
   - translated_periodic_phase_matching
+  - nearest_test_neighborhood_holdout_as_retraining_gate
 pending_queue:
-  - L0-025_test_neighborhood_assignment_holdout
-  - one_test_matched_retrain_only_if_l0_025_fixed_gate_passes
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
 gpu_hours_used: 0.825
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
-  python scripts/audit_test_neighborhood_holdout.py --config
-  configs/v4_attempt1_structured.json
-git_commit: 14edf76
-last_update_time: 2026-08-22T22:28:00+08:00
+  Paused by user; do not launch another experiment until explicitly resumed.
+git_commit: 92cb10c
+last_update_time: 2026-08-22T23:49:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -142,3 +141,7 @@ notes:
   - L0-024 evaluated 256 phases per cell and 36 finalist combinations in 94.16 seconds without reading channel labels.
   - Its best periodic combination had support AUC 0.551188 and nearest-median gap 0.122 m, but link/environment AUC remained 0.993904.
   - L0-024 selected only 437 samples and reduced link/environment AUC by just 0.002390 instead of the fixed 0.10 requirement, so periodic phase matching is dropped without retraining.
+  - L0-025 built exactly 500 unique same-cell train matches, one per test position, without reading any channel labels.
+  - L0-025 support AUC was 0.647896 and nearest-support median gap was 0.207 m, both within the fixed gate.
+  - L0-025 reduced link/environment AUC from 0.996294 to 0.960860, an improvement of 0.035434 but far below the required 0.10 reduction.
+  - L0-025 therefore did not authorize a retrain; the campaign was paused at the user's request.

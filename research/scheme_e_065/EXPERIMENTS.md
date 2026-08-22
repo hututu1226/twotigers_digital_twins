@@ -590,3 +590,25 @@ L0-022 在按 test 的 cell/邻点距离重加权后，基线/候选为 `0.62955
 ### Decision
 
 `DROP_PERIODIC_PHASE_MATCHING`。未启动任何 GPU 复训。下一项 L0-025 固定使用 test 到同基站 train 的一对一空间近邻匹配，验证更直接的 test-neighborhood holdout；仍不使用任何测试信道标签。
+
+## L0-025
+
+### Hypothesis
+
+周期棋盘无法专门覆盖测试点环境；将每个 test 点一对一匹配到同基站最近的 train 点，应当更直接地复刻测试点所在的基站距离、墙面法向和走廊区域。
+
+### Minimal Experiment
+
+不读取任何训练或测试信道。每个基站内使用最小总 XY 距离的一对一 assignment，让 500 个 test 点各自对应一个不重复的 train 点。移除这 500 个点后重新计算验证支撑距离、support-only AUC 和 link/environment AUC，沿用 L0-024 的固定晋级门槛。
+
+### Result
+
+审计正常结束。验证集恰好 500 条，两个基站数量与 test 一致。support AUC=`0.647896`，最近支撑距离中位数与 test 只差 `0.207 m`，均通过门槛。link/environment AUC 从 Fold0 的 `0.996294` 降到 `0.960860`，说明直接邻域匹配确实有效，但只降低 `0.035434`，没有达到预注册要求的 `0.10`。
+
+### Interpretation
+
+测试点附近的训练坐标能改善环境匹配，但相隔几米的点云局部法向、遮挡和联合 RF 特征仍可被分类器明显区分。这个验证集仍不足以可靠替代真实测试分布；此时启动整套 V4 复训可能只是在新的代理验证集上继续过拟合。
+
+### Decision
+
+`DROP_NEAREST_TEST_NEIGHBORHOOD_HOLDOUT`。不启动 GPU 复训。按用户要求暂停当天自主研究；当前预注册严格 Fold0 主基线仍为 `0.631581`，用户反馈的 Scheme E 官方线上分数仍为 `0.59`。
