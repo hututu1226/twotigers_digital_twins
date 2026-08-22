@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: transport_count_gate_ready
+status: quality_gated_scale_oracle_ready
 authoritative_best: 0.631581059599534
 target_score: 0.65000
 official_online_score: 0.59
@@ -15,10 +15,10 @@ best_artifact_paths:
   carrier_rule_report: research/scheme_e_065/L0_014_CARRIER_QUALITY_FALLBACK.json
   prediction: research/scheme_e_065/FOLD0_QUALITY_GATED_PREDICTION.npy
 current_hypothesis: >-
-  BS1 carrier fit quality is only 0.124, so averaging several imperfectly
-  carrier-aligned complex neighbors may cancel useful signal; a fixed
-  quality gate should use one transport neighbor for that cell.
-current_experiment: L0-018
+  The L0-014 baseline changed phase alignment and NMSE enough that its
+  per-sample amplitude and complex-scale ceilings must be recomputed before
+  scale correction remains a closed route.
+current_experiment: L0-019
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -43,6 +43,7 @@ completed_experiments:
   - L0-015_round1_marginal_spectral_projection_expert
   - L0-016_quality_gated_local_oracle
   - L0-017_three_expert_oracle
+  - L0-018_quality_gated_transport_count
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -56,18 +57,18 @@ dropped_families:
   - query_only_full_resolution_magnitude_refiner
   - adaptive_teacher_conditioned_hybrid_finetune
   - round1_marginal_projection_as_primary_route
+  - quality_gated_transport_count
 pending_queue:
-  - L0-018_quality_gated_transport_count
-  - path_selective_carrier_fit_only_if_transport_count_probe_supports_the_mechanism
+  - L0-019_quality_gated_scale_oracles
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
 gpu_hours_used: 0.657
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  python scripts/diagnose_transport_count_gate.py
-git_commit: pending_l0_018_commit
-last_update_time: 2026-08-22T19:25:00+08:00
+  python scripts/diagnose_saved_prediction_scale_oracles.py
+git_commit: pending_l0_019_commit
+last_update_time: 2026-08-22T19:55:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -104,3 +105,5 @@ notes:
   - L0-016 quality-gated V4 plus aligned local residual oracle reached 0.648399, diagnostic only.
   - L0-017 added the Round1 marginal candidate and raised the three-expert oracle to 0.651713, diagnostic only.
   - L0-017 is below the fixed 0.66 Router threshold, so no complex Router is trained.
+  - L0-018 reduced BS1 transport count from 8 to 1 and improved BS1 by only 0.001869.
+  - L0-018 missed its fixed 0.003 promotion threshold and is dropped without a count scan.

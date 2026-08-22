@@ -399,3 +399,29 @@ BS1 的 carrier fit 质量只有 `0.124`，即使斜率回退后，多邻居复�
 ### Expected Signal
 
 BS1 Score 至少增加 `0.003`；否则不实现按 cell gate，也不扫描其他 count。
+
+### Result
+
+新基线严格复现为 Score=`0.631581`。BS1 从 PAS=`0.504569`、PDP=`0.711720`、NMSE=`1.065703`、Score=`0.583335` 变为 PAS=`0.507764`、PDP=`0.711550`、NMSE=`1.051741`、Score=`0.585204`，净增 `+0.001869`。耗时 `16.09` 秒。
+
+### Interpretation
+
+多邻居复数平均确有少量相消，但只解释了 BS1 很小一部分损失，远不足以成为主要突破方向。
+
+### Decision
+
+`DROP`。不扫描 count，也不继续实现路径选择性 carrier fit。
+
+## L0-019
+
+### Hypothesis
+
+L0-014 已改变相位对齐和 NMSE，因此必须重新计算新基线的单样本 real scale、complex scale 与 power scale 上限，才能判断尺度校准是否仍有足够空间。
+
+### Minimal Experiment
+
+直接读取保存的 quality-gated Fold0 prediction；不训练、不拟合可部署参数。Fold0 target 只用于明确标注的 oracle 缩放与统一评估。
+
+### Expected Signal
+
+至少一个尺度 oracle 达到 `0.65`，否则尺度校准继续保持 DROP。
