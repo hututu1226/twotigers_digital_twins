@@ -477,3 +477,29 @@ L0-014 已改变相位对齐和 NMSE，因此必须重新计算新基线的单�
 ### Expected Signal
 
 任一直接候选提升至少 `0.003`，或邻点相位专家 oracle 达到 `0.655`；否则 DROP，不训练 phase attention。
+
+### Result
+
+最近邻相位得到 PAS=`0.563862`、PDP=`0.755625`、NMSE=`1.018001`、Score=`0.626903`，下降 `0.004679`。8 邻居相干融合相位得到 Score=`0.628798`，下降 `0.002784`。baseline、相干融合和 8 个单邻点相位的 target-informed oracle 仅为 PAS=`0.574851`、PDP=`0.774229`、NMSE=`0.864322`、Score=`0.646909`。耗时 `9.03` 秒。
+
+### Interpretation
+
+邻点逐路径相位即使做全局载波对齐，仍会随位置快速变化。一个理想 Router 在这些候选中挑选也达不到目标，因此 learned phase attention 没有足够可观测上限。
+
+### Decision
+
+`DROP`。不训练 phase attention。
+
+## L1-006
+
+### Hypothesis
+
+此前 magnitude 路线失败，不代表完整幅度不可预测；它们分别缺少局部集合、完整分辨率或可学习门控。query-conditioned local set full-resolution operator 可以同时补齐这三个缺口。
+
+### Minimal Experiment
+
+完整保留 `[Mp*N,Mv,Mh,S]` log-power 网格。共享 3D encoder 处理 K 个邻点 OOF residual，relative geometry 产生 attention，融合后只输出 bounded residual correction。先跑 Fold0-train 内部 spatial holdout，最低晋级增益固定为 `+0.004`。
+
+### Abort Rule
+
+inner 最佳为 epoch0、增益低于 `0.004`，或 PDP 明显下降时立即 DROP，不进入 strict Fold0。
