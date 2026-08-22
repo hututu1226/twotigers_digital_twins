@@ -13,9 +13,11 @@ from scheme_e.carrier_transport import (
     select_transport_candidates,
 )
 from scheme_e.complex_residual import (
+    angle_delay_log_power,
     angle_delay_to_complex,
     complex_to_angle_delay,
     reconstruct_low_rank_residual,
+    replace_angle_delay_log_power,
     split_complex_correction,
 )
 from scheme_e.gp import (
@@ -238,6 +240,28 @@ def test_low_rank_residual_reconstruction_uses_only_selected_rank() -> None:
     assert torch.allclose(rank0, mean.expand_as(residual))
     assert torch.allclose(rank1, torch.tensor([[3.0, 2.0, 7.0], [5.0, 2.0, 7.0]]))
     assert torch.allclose(rank2, torch.tensor([[3.0, 4.0, 7.0], [5.0, 8.0, 7.0]]))
+
+
+def test_log_power_replacement_preserves_base_phase() -> None:
+    shape = _shape()
+    generator = torch.Generator().manual_seed(59)
+    base = torch.randn(2, *shape.ad_shape, generator=generator)
+    base_complex = angle_delay_to_complex(base, shape)
+    target_log_power = angle_delay_log_power(base * 1.7, shape, scale=4.0)
+    replaced = replace_angle_delay_log_power(
+        base, target_log_power, shape, scale=4.0
+    )
+    replaced_complex = angle_delay_to_complex(replaced, shape)
+    np.testing.assert_allclose(
+        replaced_complex.abs().numpy(),
+        (base_complex * 1.7).abs().numpy(),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    phase_alignment = (
+        replaced_complex * base_complex.conj()
+    ).imag.abs().max()
+    assert float(phase_alignment) < 1e-5
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -671,6 +695,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_low_rank_residual_reconstruction(self) -> None:
         test_low_rank_residual_reconstruction_uses_only_selected_rank()
+
+    def test_log_power_replacement(self) -> None:
+        test_log_power_replacement_preserves_base_phase()
 
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()

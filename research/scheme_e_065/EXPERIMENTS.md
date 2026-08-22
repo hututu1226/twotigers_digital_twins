@@ -15,7 +15,8 @@
 | L0-008 | L1-001 平均失败但可能存在可识别的互补子集。 | 计算修正候选 oracle、系数 skill 和空间连续性。 | inner oracle 增益 +0.011291；邻点系数 skill 为负。 | oracle 0.610575 | - | - | - | +0.011291 | KEEP FOR STRICT ORACLE | 0.010 h |
 | L0-009 | 新候选与权威 V4 基线的严格 Fold0 oracle 能否跨过 0.65。 | 只训练已选 epoch，统一评估固定候选。 | 完美选择达到 0.656555；所有单候选低于基线。 | oracle 0.656555 | - | - | - | +0.029465 | PROMOTE ROUTER PROBE | 0.014 h |
 | L1-002 | inner OOF gain router 能否学到候选互补性。 | ExtraTrees 预测每个候选相对基线的逐样本收益，保守阈值回退。 | inner OOF 增益 0；router 未过门槛。 | 0.627089 | 0.567081 | 0.758360 | 1.063711 | +0.000000 | DROP | 0.013 h |
-| L0-010 | 归一化复数角时延残差是否存在不同于 AE Detail 的低秩结构。 | Fold0-train OOF teacher 残差拟合 PCA；分别测 magnitude/phase/complex oracle。 | READY | - | - | - | - | - | RUNNING | <=0.25 h |
+| L0-010 | 归一化复数角时延残差是否存在不同于 AE Detail 的低秩结构。 | Fold0-train OOF teacher 残差拟合 PCA；分别测 magnitude/phase/complex oracle。 | rank64 magnitude 首次越过 0.65。 | oracle 0.663754 | 0.649174 | 0.766221 | 1.049267 | +0.036665 | PROMOTE | 0.004 h |
+| L0-011 | 幅度专用 log-power 表示能否用更干净的低秩系数保留 L0-010 上限。 | 全分辨率 log(1+4P) 残差 PCA，只做 magnitude oracle。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
 
 ## L0 结论
 
@@ -94,3 +95,45 @@ L0-009 的逐样本真值选择上限为 `0.656555`，相对基线具有 `+0.029
 ### Next Action
 
 执行 L0-010，比较 AE Detail latent 与直接复数角时延残差的 train-only oracle 上限。AE Detail rank128 已知只有 `0.631194`，因此不会再训练 Detail latent predictor。
+
+## L0-010
+
+### Hypothesis
+
+Fold0-train-only 的归一化复数角时延残差基底具有超过 `0.65` 的严格 Fold0 oracle 上限。
+
+### Evidence
+
+AE Detail latent 的 rank128 oracle 只有 `0.631194`，但基线 NMSE 仍高；因此需要检查 AE latent 之外的高分辨率表示。
+
+### Minimal Experiment
+
+每个基站独立使用 Fold0-train OOF teacher seed 残差拟合 PCA。Fold0 target 仅用于计算不可部署系数；对 rank0/8/16/32/64 分别评估 complex、magnitude-only 和 phase-only。
+
+### Expected Signal
+
+至少一种 rank64 以内的修正达到 `0.65`，且不会只依赖功率标量校准。
+
+### Abort Rule
+
+所有候选均低于 `0.65` 时关闭该表示，不训练系数预测器。
+
+### Result
+
+rank8/16/32/64 magnitude oracle 分别为 `0.631395 / 0.638181 / 0.648372 / 0.663754`。rank64 指标为 PAS=`0.649174`、PDP=`0.766221`、NMSE=`1.049267`，相对基线增加 `+0.036665`。两个基站 rank64 对训练残差解释率约为 `45.29% / 45.42%`。全流程耗时 `14.15` 秒。
+
+### Interpretation
+
+增益主要来自 PAS，而不是相位或功率尺度。可学习目标应改成高分辨率角时延幅度纹理，而不是 AE Detail 或复数相位。
+
+### Decision
+
+`PROMOTE`。先做一次 magnitude-specific 表示诊断，删除复数系数中的无用相位变化；随后只允许一个严格 inner spatial 系数 Probe。
+
+### Repository Update
+
+代码提交：`fca722c`；报告：`research/scheme_e_065/L0_010_COMPLEX_ORACLE.json`；基底：`artifacts/scheme_e_065/l0_010_complex_residual/train_only_complex_basis.pt`。
+
+### Next Action
+
+执行 L0-011 full-resolution log-power residual oracle，并据最低过线 rank 设计共享多输出 GP Probe。

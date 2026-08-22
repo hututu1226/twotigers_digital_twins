@@ -12,7 +12,9 @@ import torch
 
 from scheme_e.angle_delay import channel_to_shape_target, shape_to_channel
 from scheme_e.complex_residual import (
+    angle_delay_log_power,
     reconstruct_low_rank_residual,
+    replace_angle_delay_log_power,
     split_complex_correction,
 )
 from scheme_e.config import choose_device, load_config, save_json
@@ -67,8 +69,14 @@ def _training_residual_matrix(
     shape: object,
     device: torch.device,
     batch_size: int,
+    representation: str,
+    log_power_scale: float,
 ) -> torch.Tensor:
-    dimensions = int(np.prod(shape.ad_shape))
+    dimensions = (
+        int(np.prod(shape.ad_shape))
+        if representation == "complex"
+        else int(shape.m_p * shape.n * shape.m_v * shape.m_h * shape.s)
+    )
     residual = torch.empty(
         (len(indices), dimensions), dtype=torch.float32, device=device
     )
@@ -82,7 +90,17 @@ def _training_residual_matrix(
         seed_shape = _decode_seed_shape(
             teacher_cache, selected, autoencoder, device
         )
-        residual[start:stop] = (target_shape - seed_shape).flatten(1)
+        if representation == "complex":
+            target_value = target_shape
+            seed_value = seed_shape
+        else:
+            target_value = angle_delay_log_power(
+                target_shape, shape, log_power_scale
+            )
+            seed_value = angle_delay_log_power(
+                seed_shape, shape, log_power_scale
+            )
+        residual[start:stop] = (target_value - seed_value).flatten(1)
     return residual
 
 
@@ -174,10 +192,17 @@ def _evaluate_source(
     ranks: list[int],
     device: torch.device,
     batch_size: int,
+    representation: str,
+    log_power_scale: float,
 ) -> tuple[dict[str, dict[str, float | int]], dict[str, dict[str, np.ndarray]]]:
     metric_parts: dict[str, list[object]] = {"none": []}
+    modes = (
+        ("complex", "magnitude", "phase")
+        if representation == "complex"
+        else ("magnitude",)
+    )
     for rank in ranks:
-        for mode in ("complex", "magnitude", "phase"):
+        for mode in modes:
             metric_parts[f"rank{rank}_{mode}"] = []
     for start in range(0, len(validation), batch_size):
         stop = min(start + batch_size, len(validation))
@@ -206,7 +231,17 @@ def _evaluate_source(
         )
         cells = metadata["train_cells"][global_indices].astype(np.int64)
         active = ~target_outage
-        residual = (target_shape - base_shape).flatten(1)
+        if representation == "complex":
+            target_value = target_shape
+            base_value = base_shape
+        else:
+            target_value = angle_delay_log_power(
+                target_shape, shape, log_power_scale
+            )
+            base_value = angle_delay_log_power(
+                base_shape, shape, log_power_scale
+            )
+        residual = (target_value - base_value).flatten(1)
         for rank in ranks:
             correction = torch.zeros_like(residual)
             for cell in np.unique(cells):
@@ -219,8 +254,23 @@ def _evaluate_source(
                     int(rank),
                 )
             correction = correction.masked_fill(~active[:, None], 0.0)
-            corrected_shape = base_shape + correction.reshape_as(base_shape)
-            variants = split_complex_correction(base_shape, corrected_shape, shape)
+            if representation == "complex":
+                corrected_shape = base_shape + correction.reshape_as(base_shape)
+                variants = split_complex_correction(
+                    base_shape, corrected_shape, shape
+                )
+            else:
+                corrected_log_power = (
+                    base_value + correction.reshape_as(base_value)
+                )
+                variants = {
+                    "magnitude": replace_angle_delay_log_power(
+                        base_shape,
+                        corrected_log_power,
+                        shape,
+                        log_power_scale,
+                    )
+                }
             for mode, candidate_shape in variants.items():
                 candidate_channel = shape_to_channel(
                     candidate_shape, log_power, shape, source_outage
@@ -259,6 +309,12 @@ def main() -> None:
     parser.add_argument(
         "--report", default="../research/scheme_e_065/L0_010_COMPLEX_ORACLE.json"
     )
+    parser.add_argument(
+        "--representation",
+        choices=("complex", "log_power"),
+        default="complex",
+    )
+    parser.add_argument("--log-power-scale", type=float, default=4.0)
     parser.add_argument("--ranks", default="0,8,16,32,64")
     parser.add_argument("--pca-oversample", type=int, default=12)
     parser.add_argument("--pca-iterations", type=int, default=3)
@@ -270,6 +326,8 @@ def main() -> None:
     ranks = sorted({int(value) for value in args.ranks.split(",")})
     if not ranks or ranks[0] < 0:
         raise ValueError("Ranks must be non-negative")
+    if float(args.log_power_scale) <= 0.0:
+        raise ValueError("log-power-scale must be positive")
     maximum_rank = max(ranks)
     device = choose_device(args.device)
     if device.type != "cuda":
@@ -317,6 +375,8 @@ def main() -> None:
             shape,
             device,
             int(args.batch_size),
+            str(args.representation),
+            float(args.log_power_scale),
         )
         basis = _fit_cell_basis(
             residual,
@@ -344,13 +404,14 @@ def main() -> None:
             f"{basis_report[str(int(cell))]['explained_cumulative'][str(maximum_rank)]:.6f}",
             flush=True,
         )
-    basis_path = output_dir / "train_only_complex_basis.pt"
+    basis_path = output_dir / f"train_only_{args.representation}_basis.pt"
     torch.save(
         {
             "bases": bases,
             "shape": shape.__dict__,
             "settings": vars(args),
             "leakage_boundary": "Fold0-train OOF teacher seed residuals only",
+            "representation": str(args.representation),
         },
         basis_path,
     )
@@ -383,6 +444,8 @@ def main() -> None:
             ranks,
             device,
             int(args.batch_size),
+            str(args.representation),
+            float(args.log_power_scale),
         )
         evaluations[source_name] = metrics
         for candidate_name, values in arrays.items():
@@ -413,9 +476,11 @@ def main() -> None:
         "diagnostic_only": True,
         "deployable": False,
         "hypothesis": (
-            "A train-only low-rank complex angle-delay residual basis has a "
-            "strict Fold0 oracle ceiling above 0.65."
+            "A train-only low-rank angle-delay residual basis in the selected "
+            "representation has a strict Fold0 oracle ceiling above 0.65."
         ),
+        "representation": str(args.representation),
+        "log_power_scale": float(args.log_power_scale),
         "leakage_control": {
             "basis_fit": "Fold0-train non-outage residuals only",
             "basis_seed": "OOF teacher latent decoded by the frozen AE",

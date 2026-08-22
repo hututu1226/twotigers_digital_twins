@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: complex_residual_oracle_ready
+status: magnitude_residual_oracle_ready
 authoritative_best: 0.627089141574626
 target_score: 0.65000
 official_online_score: 0.59
@@ -14,9 +14,9 @@ best_artifact_paths:
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
 current_hypothesis: >-
-  A Fold0-train-only low-rank basis in normalized complex angle-delay space has
-  a strict Fold0 oracle ceiling above 0.65, unlike the AE detail latent.
-current_experiment: L0-010
+  A dedicated full-resolution log-power residual basis removes irrelevant phase
+  variation and crosses 0.65 with fewer or more predictable coefficients.
+current_experiment: L0-011
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -29,6 +29,7 @@ completed_experiments:
   - L0-008_rank16_failure_counterfactual
   - L0-009_strict_rank16_candidate_oracle
   - L1-002_inner_oof_candidate_gain_router
+  - L0-010_train_only_complex_angle_delay_residual_oracle
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -39,17 +40,17 @@ dropped_families:
   - rank16_local_set_coefficient_prediction
   - rank16_residual_candidate_routing
 pending_queue:
-  - L0-010_train_only_complex_angle_delay_residual_oracle
-  - L1_complex_residual_probe_only_if_L0-010_crosses_065
+  - L0-011_train_only_full_resolution_log_power_residual_oracle
+  - L1_magnitude_coefficient_gp_probe_if_L0-011_crosses_065
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.12
+gpu_hours_used: 0.13
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_complex_oracle.sh
-git_commit: pending_l0_010_commit
-last_update_time: 2026-08-22T15:48:00+08:00
+  bash scripts/run_scheme_e_065_magnitude_oracle.sh
+git_commit: pending_l0_011_commit
+last_update_time: 2026-08-22T16:04:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -61,3 +62,6 @@ notes:
   - L1-002 inner spatial OOF router gain was exactly 0.000000; it did not train a deployable router.
   - L1-002 strict Fold0 therefore retained baseline Score 0.627089; the 0.656555 oracle remains diagnostic only.
   - Existing AE detail-latent rank128 oracle was only 0.631194, so that representation is closed.
+  - L0-010 direct complex angle-delay rank64 magnitude oracle reached 0.663754, diagnostic only.
+  - L0-010 gains came mostly from PAS: 0.567081 to 0.649174; phase correction was not selected.
+  - L0-010 rank32 magnitude oracle was 0.648372, so rank64 was the first tested rank above 0.65.

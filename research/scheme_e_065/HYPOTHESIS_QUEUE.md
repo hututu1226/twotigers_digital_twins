@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | 直接复数角时延残差存在 AE Detail latent 没有保留的低秩结构。 | AE Detail rank128 oracle 仅 `0.631194`；但 NMSE 仍为主要短板。 | 若 oracle 过 0.65，再争取可部署 `+0.004` 到 `+0.015`。 | 待 L0-010。 | Fold0-train OOF 残差 PCA；分别测 magnitude/phase/complex，不训练 predictor。 | <=0.25 h | rank64 最好 oracle `<0.65`。 | 只在过线后执行一个最小系数 Probe。 |
+| 1 | 幅度专用 full-resolution log-power 残差能保留 L0-010 的上限，同时比复数系数更可预测。 | L0-010 rank64 magnitude oracle=`0.663754`，增益主要来自 PAS；相位不是最佳分支。 | oracle 维持 `>=0.65`，部署 Probe 目标先 `+0.004`。 | complex-basis magnitude oracle `0.663754`。 | train-only log-power PCA，不训练 predictor。 | <=0.1 h | rank128 仍 `<0.65`。 | 选择最低过线 rank 做共享多输出 GP inner Probe。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量，但当前候选 Router OOF 增益为 0。 | `+0.003` 到 `+0.010`。 | 必须先有新的二专家 oracle `>=+0.010`。 | 新候选产生后先算二专家 oracle。 | <=0.2 h | 无新候选或 oracle 增益 `<0.010`。 | 只允许 OOF gate。 |
 
 ## 已 DROP
