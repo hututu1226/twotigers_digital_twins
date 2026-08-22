@@ -57,7 +57,10 @@ from scheme_e.hybrid_training import (
 from scheme_e.hybrid_model import SpectralGaussianHybrid, StructuredSpectralFieldEncoder
 from scheme_e.local_spectral import local_expert_settings, local_spectral_prediction
 from scheme_e.neural_spectral_refiner import SpectralNeighborRefiner
-from scheme_e.residual_set_model import ResidualCoefficientSetEncoder
+from scheme_e.residual_set_model import (
+    ResidualCoefficientSetEncoder,
+    spectrum_summary_features,
+)
 
 
 def _shape() -> ChannelShape:
@@ -186,6 +189,20 @@ def test_residual_set_encoder_preserves_full_seed_grid() -> None:
     assert output["attention"].shape == (3, 5)
     assert torch.allclose(output["attention"].sum(dim=1), torch.ones(3), atol=1e-6)
     assert torch.all(output["effective_neighbors"] >= 1.0)
+
+
+def test_spectrum_summary_features_are_finite_and_channel_preserving() -> None:
+    latent = np.asarray(
+        [
+            [[[-1.0, 2.0]], [[3.0, -4.0]]],
+            [[[5.0, 7.0]], [[-2.0, -6.0]]],
+        ],
+        dtype=np.float32,
+    )
+    features = spectrum_summary_features(latent, channels=2)
+    assert features.shape == (2, 6)
+    np.testing.assert_allclose(features[:, 4:], [[2.0, 4.0], [7.0, 6.0]])
+    assert np.isfinite(features).all()
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -610,6 +627,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_residual_set_encoder(self) -> None:
         test_residual_set_encoder_preserves_full_seed_grid()
+
+    def test_spectrum_summary_features(self) -> None:
+        test_spectrum_summary_features_are_finite_and_channel_preserving()
 
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()

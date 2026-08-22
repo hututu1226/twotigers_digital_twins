@@ -23,7 +23,10 @@ from scheme_e.diagnostics import (
 )
 from scheme_e.hybrid_training import load_hybrid_checkpoint
 from scheme_e.power_safety import apply_outage_policy
-from scheme_e.residual_set_model import ResidualCoefficientSetEncoder
+from scheme_e.residual_set_model import (
+    ResidualCoefficientSetEncoder,
+    spectrum_summary_features,
+)
 
 
 def _load_npz(path: str | Path) -> dict[str, np.ndarray]:
@@ -242,12 +245,8 @@ def _router_features(
         ],
         axis=1,
     )
-    seed = seed_cache["spectrum"][queries].astype(np.float32).reshape(
-        len(queries), 64, -1
-    )
-    seed_features = np.concatenate(
-        [seed.mean(axis=2), seed.std(axis=2), np.abs(seed).amax(axis=2)],
-        axis=1,
+    seed_features = spectrum_summary_features(
+        seed_cache["spectrum"][queries], channels=64
     )
     coefficient_features = np.concatenate(
         [

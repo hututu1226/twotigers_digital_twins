@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -11,6 +12,28 @@ def _groups(channels: int) -> int:
         if channels % groups == 0:
             return groups
     return 1
+
+
+def spectrum_summary_features(
+    spectrum_latent: np.ndarray, channels: int
+) -> np.ndarray:
+    """Summarize each latent channel without discarding its channel identity."""
+    values = np.asarray(spectrum_latent, dtype=np.float32)
+    if values.shape[0] == 0:
+        return np.empty((0, int(channels) * 3), dtype=np.float32)
+    if values.size % (len(values) * int(channels)) != 0:
+        raise ValueError(
+            f"Cannot reshape latent {values.shape} into {int(channels)} channels"
+        )
+    reshaped = values.reshape(len(values), int(channels), -1)
+    return np.concatenate(
+        [
+            reshaped.mean(axis=2),
+            reshaped.std(axis=2),
+            np.abs(reshaped).max(axis=2),
+        ],
+        axis=1,
+    ).astype(np.float32)
 
 
 class ResidualCoefficientSetEncoder(nn.Module):
