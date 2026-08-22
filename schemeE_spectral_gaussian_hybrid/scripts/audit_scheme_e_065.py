@@ -772,6 +772,13 @@ def main() -> None:
     )
     parser.add_argument("--base-priors")
     parser.add_argument("--adaptive-priors")
+    parser.add_argument(
+        "--extra-prior",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="Additional leakage-free prior evaluated with the fixed V4 checkpoint",
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--output-dir", default="../research/scheme_e_065")
     parser.add_argument("--expected-score", type=float, default=BEST_SCORE)
@@ -873,6 +880,32 @@ def main() -> None:
             compare_path=prediction_path,
             include_scale_oracles=False,
         )
+    for specification in args.extra_prior:
+        if "=" not in specification:
+            raise ValueError("--extra-prior must use NAME=PATH")
+        name, prior_path = specification.split("=", maxsplit=1)
+        name = name.strip()
+        if not name or name == "base" or name in variants:
+            raise ValueError(f"Invalid or duplicate extra-prior name: {name!r}")
+        extra_priors = _load_npz(prior_path)
+        teacher[name] = _teacher_metrics(extra_priors, targets, validation)
+        variants[name] = _collect_variant(
+            name=name,
+            config=config,
+            priors=extra_priors,
+            metadata=metadata,
+            targets=targets,
+            channels=channels,
+            validation=validation,
+            observed=observed,
+            checkpoint_path=checkpoint_path,
+            policy=policy,
+            output_projection=output_projection,
+            device=device,
+            save_path=None,
+            compare_path=prediction_path,
+            include_scale_oracles=False,
+        )
 
     np.save(output_dir / "FOLD0_INDICES.npy", validation.astype(np.int64))
 
@@ -928,19 +961,28 @@ def main() -> None:
         expert_arrays = {name: value["arrays"]["final"] for name, value in variants.items()}
         oracle = target_informed_expert_oracle(expert_arrays)
         per_sample["expert_oracle_selection"] = np.asarray(oracle.pop("selection"))
-        per_sample["adaptive_teacher_pas"] = np.asarray(
-            teacher["adaptive"]["pas"], dtype=np.float32
-        )
-        per_sample["adaptive_teacher_pdp"] = np.asarray(
-            teacher["adaptive"]["pdp"], dtype=np.float32
-        )
-        per_sample["adaptive_disagreement_nmse"] = variants["adaptive"][
-            "disagreement_nmse"
-        ].astype(np.float32)
-        for field in ("pas", "pdp", "sample_nmse", "sample_score", "prediction_log_power"):
-            per_sample[f"adaptive_final_{field}"] = np.asarray(
-                variants["adaptive"]["arrays"]["final"][field]
+        for name in variants:
+            if name == "base":
+                continue
+            per_sample[f"{name}_teacher_pas"] = np.asarray(
+                teacher[name]["pas"], dtype=np.float32
             )
+            per_sample[f"{name}_teacher_pdp"] = np.asarray(
+                teacher[name]["pdp"], dtype=np.float32
+            )
+            per_sample[f"{name}_disagreement_nmse"] = variants[name][
+                "disagreement_nmse"
+            ].astype(np.float32)
+            for field in (
+                "pas",
+                "pdp",
+                "sample_nmse",
+                "sample_score",
+                "prediction_log_power",
+            ):
+                per_sample[f"{name}_final_{field}"] = np.asarray(
+                    variants[name]["arrays"]["final"][field]
+                )
     np.savez_compressed(output_dir / "PER_SAMPLE_METRICS.npz", **per_sample)
 
     serializable_variants = {}
