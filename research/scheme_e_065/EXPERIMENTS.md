@@ -19,7 +19,8 @@
 | L0-011 | 幅度专用 log-power 表示能否用更干净的低秩系数保留 L0-010 上限。 | 全分辨率 log(1+4P) 残差 PCA，只做 magnitude oracle。 | rank8 已越过 0.65，rank128 达 0.762587。 | oracle 0.762587 | 0.795743 | 0.869032 | 1.068750 | +0.135498 | PROMOTE TO L1 | 0.003 h |
 | L1-003 | 三核共享多输出 GP 能否跨空间洞预测 rank8 幅度残差系数。 | 每个 BS 独立拟合 RQ10/RQ20/Matern20，固定等权；inner 仅选 0.5/1.0 修正强度。 | 系数 skill=-1.133，修正显著退化。 | inner 0.578980 | 0.559592 | 0.695186 | 1.595091 | -0.019753 | DROP | 0.004 h |
 | L1-004 | 完整能量图上的局部卷积修复能否避开不稳定的全局 PCA 坐标。 | OOF Teacher log-power 图输入；3D depthwise residual CNN；71维几何 FiLM；零初始化残差。 | PAS/NMSE 改善，PDP 小幅退化，净增 +0.001211。 | inner 0.599955 | 0.590019 | 0.716790 | 1.589615 | +0.001211 | MODIFY_ONCE | 0.101 h |
-| L1-005 | 直接约束角度/时延能量边缘能否保住 L1-004 收益并修复 PDP。 | 模型、数据、采样均不变；仅增加固定权重的 PAS/PDP proxy cosine loss。 | READY | - | - | - | - | - | RUNNING | <=0.5 h |
+| L1-005 | 直接约束角度/时延能量边缘能否保住 L1-004 收益并修复 PDP。 | 模型、数据、采样均不变；仅增加固定权重的 PAS/PDP proxy cosine loss。 | best epoch0，所有修正均低于基线。 | inner 0.598744 | 0.586458 | 0.718097 | 1.600037 | +0.000000 | DROP | 0.064 h |
+| L0-012 | 邻近观测点的完整 Teacher 幅度误差是否可直接迁移到查询点。 | 同 BS 最近 1/4/8 个点的 target-minus-OOF-teacher log-power 残差；只在 inner split 选固定强度。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
 
 ## L0 结论
 
@@ -222,3 +223,21 @@ inner 基线 PAS=`0.586458`、PDP=`0.718097`、NMSE=`1.600037`、Score=`0.598744
 ### Repository Update
 
 代码提交：`9525b67`；云端报告：`research/scheme_e_065/L1_004_FULLRES_REFINER.json`；日志：`schemeE_spectral_gaussian_hybrid/logs/scheme_e_065_l1_004_fullres_refiner.log`。
+
+## L1-005
+
+### Result
+
+加入固定权重 `0.5` 的角度/时延能量边缘损失后，inner 最佳仍是 epoch0：PAS=`0.586458`、PDP=`0.718097`、NMSE=`1.600037`、Score=`0.598744`，增益 `0.000000`。实验在 228.55 秒早停。
+
+### Interpretation
+
+新的边缘损失虽然继续降低训练目标，但从第一个 epoch 起验证分就低于不修正 Teacher，说明该代理损失与最终复数信道指标仍不对齐。L1-004 的微小收益无法通过一次针对性修改稳定复现。
+
+### Decision
+
+`DROP`。完整网格、仅依赖 query Teacher 与静态几何的 refiner 模型族不再调权重、宽度或 epoch。
+
+### Next Action
+
+执行 L0-012，直接检查真实邻点的完整幅度残差在空间上是否可迁移，为新的局部上下文模型提供或否定证据。

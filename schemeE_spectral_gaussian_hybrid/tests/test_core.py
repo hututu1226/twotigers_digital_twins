@@ -44,6 +44,10 @@ from scheme_e.magnitude_refiner import (
     magnitude_marginal_cosine_loss,
     normalize_log_power_grid,
 )
+from scheme_e.local_magnitude import (
+    same_cell_neighbors,
+    transfer_log_power_residual,
+)
 from scheme_e.power_safety import (
     apply_outage_policy,
     apply_power_calibration,
@@ -307,6 +311,32 @@ def test_full_resolution_magnitude_refiner_starts_from_identity() -> None:
     assert torch.isfinite(marginal_loss)
     loss.backward()
     assert model.output.weight.grad is not None
+
+
+def test_local_magnitude_transfer_uses_same_cell_residuals() -> None:
+    positions = np.asarray([[0, 0], [1, 0], [10, 0], [11, 0]], dtype=np.float32)
+    cells = np.asarray([0, 0, 1, 1], dtype=np.int64)
+    neighbors, distances = same_cell_neighbors(
+        positions,
+        cells,
+        np.asarray([0, 2], dtype=np.int64),
+        np.asarray([1, 3], dtype=np.int64),
+        count=1,
+    )
+    np.testing.assert_array_equal(neighbors[:, 0], np.asarray([0, 2]))
+    np.testing.assert_allclose(distances[:, 0], 1.0)
+    query = np.ones((2, 1, 1), dtype=np.float32)
+    neighbor_base = np.zeros((2, 1, 1, 1), dtype=np.float32)
+    neighbor_target = np.asarray([[[[2.0]]], [[[4.0]]]], dtype=np.float32)
+    transferred = transfer_log_power_residual(
+        query,
+        neighbor_base,
+        neighbor_target,
+        distances,
+        count=1,
+        strength=0.5,
+    )
+    np.testing.assert_allclose(transferred[:, 0, 0], np.asarray([2.0, 3.0]))
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -746,6 +776,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_full_resolution_magnitude_refiner(self) -> None:
         test_full_resolution_magnitude_refiner_starts_from_identity()
+
+    def test_local_magnitude_transfer(self) -> None:
+        test_local_magnitude_transfer_uses_same_cell_residuals()
 
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()
