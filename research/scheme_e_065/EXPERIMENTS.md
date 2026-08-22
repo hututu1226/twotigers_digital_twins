@@ -17,7 +17,8 @@
 | L1-002 | inner OOF gain router 能否学到候选互补性。 | ExtraTrees 预测每个候选相对基线的逐样本收益，保守阈值回退。 | inner OOF 增益 0；router 未过门槛。 | 0.627089 | 0.567081 | 0.758360 | 1.063711 | +0.000000 | DROP | 0.013 h |
 | L0-010 | 归一化复数角时延残差是否存在不同于 AE Detail 的低秩结构。 | Fold0-train OOF teacher 残差拟合 PCA；分别测 magnitude/phase/complex oracle。 | rank64 magnitude 首次越过 0.65。 | oracle 0.663754 | 0.649174 | 0.766221 | 1.049267 | +0.036665 | PROMOTE | 0.004 h |
 | L0-011 | 幅度专用 log-power 表示能否用更干净的低秩系数保留 L0-010 上限。 | 全分辨率 log(1+4P) 残差 PCA，只做 magnitude oracle。 | rank8 已越过 0.65，rank128 达 0.762587。 | oracle 0.762587 | 0.795743 | 0.869032 | 1.068750 | +0.135498 | PROMOTE TO L1 | 0.003 h |
-| L1-003 | 三核共享多输出 GP 能否跨空间洞预测 rank8 幅度残差系数。 | 每个 BS 独立拟合 RQ10/RQ20/Matern20，固定等权；inner 仅选 0.5/1.0 修正强度。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
+| L1-003 | 三核共享多输出 GP 能否跨空间洞预测 rank8 幅度残差系数。 | 每个 BS 独立拟合 RQ10/RQ20/Matern20，固定等权；inner 仅选 0.5/1.0 修正强度。 | 系数 skill=-1.133，修正显著退化。 | inner 0.578980 | 0.559592 | 0.695186 | 1.595091 | -0.019753 | DROP | 0.004 h |
+| L1-004 | 完整能量图上的局部卷积修复能否避开不稳定的全局 PCA 坐标。 | OOF Teacher log-power 图输入；3D depthwise residual CNN；71维几何 FiLM；零初始化残差。 | READY | - | - | - | - | - | RUNNING | <=0.5 h |
 
 ## L0 结论
 
@@ -172,3 +173,33 @@ V4 baseline 的 rank8/16/32/64/128 magnitude oracle 分别为 `0.671796 / 0.7026
 ### Next Action
 
 执行 L1-003。inner Score 至少增加 `0.004` 才允许严格 Fold0；不通过则直接 DROP，不扩大 rank 或扫描核参数。
+
+## L1-003
+
+### Hypothesis
+
+每个基站独立的 RQ10/RQ20/Matern20 共享多输出 GP，可以跨空间洞预测 rank8 全分辨率能量残差系数。
+
+### Minimal Experiment
+
+inner PCA 只用 inner-training 拟合；三个 GP 固定等权；只比较固定修正强度 `0.5/1.0`。inner 至少增加 `0.004` 才允许严格 Fold0。
+
+### Result
+
+inner Teacher 基线 PAS=`0.586466`、PDP=`0.718066`、NMSE=`1.600123`、Score=`0.598732`。alpha0.5 降至 `0.578980`，alpha1.0 降至 `0.557679`。GP 系数预测 skill=`-1.1334`、Pearson=`-0.2479`，两个基站 rank8 的训练残差解释率为 `32.22%/38.20%`。耗时 `13.76` 秒，没有进入严格 Fold0。
+
+### Interpretation
+
+PCA 能用真值系数重建误差，但这些全局系数在新空间块上不连续。继续改核长度、扩大 rank 或增加 GP 复杂度只会拟合训练点，不能解决表示不稳定的问题。
+
+### Decision
+
+`DROP` rank8 magnitude coefficient GP regression。下一实验不再预测全局 PCA 坐标，而是在完整能量图上学习局部、平移等变的卷积修正。
+
+### Repository Update
+
+代码提交：`56d559e`；云端报告：`research/scheme_e_065/L1_003_MAGNITUDE_GP_PROBE.json`；日志：`schemeE_spectral_gaussian_hybrid/logs/scheme_e_065_l1_003_magnitude_gp.log`。
+
+### Next Action
+
+执行 L1-004 full-resolution magnitude refiner。仅当 inner gain 至少 `+0.004` 时训练一次严格 Fold0 模型。

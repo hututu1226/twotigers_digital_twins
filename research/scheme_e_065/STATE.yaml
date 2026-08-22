@@ -1,5 +1,5 @@
 campaign: scheme_e_strict_fold0_065
-status: magnitude_gp_probe_ready
+status: full_resolution_magnitude_refiner_ready
 authoritative_best: 0.627089141574626
 target_score: 0.65000
 official_online_score: 0.59
@@ -14,10 +14,10 @@ best_artifact_paths:
   projection: schemeE_spectral_gaussian_hybrid/reports/generated/v4_attempt1_output_projection.json
   prediction: research/scheme_e_065/FOLD0_BASELINE_PREDICTION.npy
 current_hypothesis: >-
-  A per-BS equal ensemble of RQ10, RQ20 and Matern20 shared multi-output GPs
-  can predict rank-8 full-resolution log-power residual coefficients across
-  spatial holes.
-current_experiment: L1-003
+  A geometry-conditioned 3D convolutional refiner can learn local sharpening
+  and displacement of the complete OOF Teacher log-power grid without reducing
+  it to globally unstable PCA coefficients.
+current_experiment: L1-004
 completed_experiments:
   - L0-001_baseline_reproduction
   - L0-002_metric_bridge
@@ -32,6 +32,7 @@ completed_experiments:
   - L1-002_inner_oof_candidate_gain_router
   - L0-010_train_only_complex_angle_delay_residual_oracle
   - L0-011_train_only_full_resolution_log_power_residual_oracle
+  - L1-003_rank8_magnitude_coefficient_gp_probe
 dropped_families:
   - blind_neighbor_weight_sweeps
   - blind_projection_iteration_sweeps
@@ -41,17 +42,18 @@ dropped_families:
   - scalar_power_or_complex_scale_calibration_as_primary_route
   - rank16_local_set_coefficient_prediction
   - rank16_residual_candidate_routing
+  - rank8_magnitude_coefficient_gp_regression
 pending_queue:
-  - L1-003_rank8_magnitude_coefficient_gp_probe
+  - L1-004_full_resolution_magnitude_refiner_probe
   - conservative_high_error_fallback_only_after_a_new_complementary_candidate
-gpu_hours_used: 0.134
+gpu_hours_used: 0.138
 gpu_hours_used_is_estimate: true
 gpu_budget_hours: 5.0
 exact_next_command: >-
   cd /root/autodl-tmp/twotigers_digital_twins/schemeE_spectral_gaussian_hybrid &&
-  bash scripts/run_scheme_e_065_magnitude_gp_probe.sh
-git_commit: pending_l1_003_commit
-last_update_time: 2026-08-22T16:25:00+08:00
+  bash scripts/run_scheme_e_065_fullres_refiner_probe.sh
+git_commit: pending_l1_004_commit
+last_update_time: 2026-08-22T16:40:00+08:00
 notes:
   - Fold0 scores are offline validation results and are never reported as the official online score.
   - Strict Fold0 contains 565 samples; Fold0 train contains 3435 samples.
@@ -69,3 +71,6 @@ notes:
   - L0-011 full-resolution log-power rank8 oracle reached 0.671796 on the V4 baseline and 0.661765 on the OOF Teacher seed.
   - L0-011 rank128 oracle reached 0.762587, but every L0-011 score is diagnostic only and uses Fold0 target coefficients.
   - L1-003 fixes rank8 and equal RQ10/RQ20/Matern20 weights; only correction strength is selected on the inner spatial holdout.
+  - L1-003 inner baseline was 0.598732; alpha0.5/1.0 fell to 0.578980/0.557679.
+  - L1-003 coefficient skill was -1.133 and flat correlation was -0.248, so global PCA coordinates are not spatially predictable.
+  - L1-004 keeps the complete 16x8x8x192 magnitude grid and predicts only a bounded local convolutional correction.

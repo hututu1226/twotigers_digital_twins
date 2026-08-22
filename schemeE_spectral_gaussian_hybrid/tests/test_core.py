@@ -38,6 +38,11 @@ from scheme_e.diagnostics import (
     target_informed_expert_oracle,
 )
 from scheme_e.metrics import ChannelMetricAccumulator
+from scheme_e.magnitude_refiner import (
+    FullResolutionMagnitudeRefiner,
+    energy_weighted_log_power_loss,
+    normalize_log_power_grid,
+)
 from scheme_e.power_safety import (
     apply_outage_policy,
     apply_power_calibration,
@@ -267,6 +272,36 @@ def test_log_power_replacement_preserves_base_phase() -> None:
         replaced_complex * base_complex.conj()
     ).imag.abs().max()
     assert float(phase_alignment) < 1e-5
+
+
+def test_full_resolution_magnitude_refiner_starts_from_identity() -> None:
+    generator = torch.Generator().manual_seed(61)
+    base = torch.rand(2, 4, 3, 2, 9, generator=generator) * 3.0
+    geometry = torch.randn(2, 7, generator=generator)
+    model = FullResolutionMagnitudeRefiner(
+        input_channels=4,
+        geometry_dim=7,
+        cell_count=2,
+        width=8,
+        blocks=2,
+        dropout=0.0,
+    )
+    output = model(base, geometry, torch.tensor([0, 1]))
+    expected = base
+    normalized = normalize_log_power_grid(base, scale=4.0)
+    normalized_power = torch.expm1(normalized) / 4.0
+    assert output["log_power"].shape == base.shape
+    assert torch.allclose(output["correction"], torch.zeros_like(base))
+    assert torch.allclose(output["log_power"], expected, atol=1e-6)
+    assert torch.allclose(
+        normalized_power.mean(dim=(1, 2, 3, 4)), torch.ones(2), atol=1e-5
+    )
+    loss = energy_weighted_log_power_loss(
+        output["log_power"], expected * 1.05, scale=4.0
+    )
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert model.output.weight.grad is not None
 
 
 def test_relaxed_output_projection_preserves_requested_power() -> None:
@@ -703,6 +738,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_log_power_replacement(self) -> None:
         test_log_power_replacement_preserves_base_phase()
+
+    def test_full_resolution_magnitude_refiner(self) -> None:
+        test_full_resolution_magnitude_refiner_starts_from_identity()
 
     def test_spectral_targets(self) -> None:
         test_spectral_targets_and_projection_are_finite()
