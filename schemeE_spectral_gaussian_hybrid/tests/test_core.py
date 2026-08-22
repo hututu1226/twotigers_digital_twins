@@ -52,6 +52,7 @@ from scheme_e.local_magnitude import (
     same_cell_neighbors,
     transfer_log_power_residual,
 )
+from scheme_e.local_set_magnitude import QueryConditionedLocalSetMagnitudeRefiner
 from scheme_e.marginal_projection import (
     alternating_marginal_projection,
     decode_pas_marginals,
@@ -365,6 +366,51 @@ def test_full_resolution_magnitude_refiner_starts_from_identity() -> None:
     assert torch.isfinite(marginal_loss)
     loss.backward()
     assert model.output.weight.grad is not None
+
+
+def test_local_set_magnitude_refiner_is_identity_and_permutation_invariant() -> None:
+    generator = torch.Generator().manual_seed(67)
+    base = torch.rand(2, 4, 3, 2, 9, generator=generator) * 3.0
+    residual = torch.randn(2, 3, 4, 3, 2, 9, generator=generator)
+    base_delta = torch.randn(2, 3, 4, 3, 2, 9, generator=generator)
+    relative = torch.randn(2, 3, 6, generator=generator)
+    geometry = torch.randn(2, 7, generator=generator)
+    cells = torch.tensor([0, 1])
+    model = QueryConditionedLocalSetMagnitudeRefiner(
+        input_channels=4,
+        geometry_dim=7,
+        relative_dim=6,
+        cell_count=2,
+        width=8,
+        blocks=2,
+        dropout=0.0,
+    )
+    first = model(base, residual, base_delta, relative, geometry, cells)
+    permutation = torch.tensor([2, 0, 1])
+    second = model(
+        base,
+        residual[:, permutation],
+        base_delta[:, permutation],
+        relative[:, permutation],
+        geometry,
+        cells,
+    )
+    inverse = torch.argsort(permutation)
+    assert first["log_power"].shape == base.shape
+    assert first["attention"].shape == (2, 3, 3, 2, 9)
+    assert torch.allclose(first["correction"], torch.zeros_like(base))
+    assert torch.allclose(first["log_power"], base, atol=1e-6)
+    assert torch.allclose(first["attention"].sum(dim=1), torch.ones(2, 3, 2, 9))
+    assert torch.allclose(
+        first["attention"], second["attention"][:, inverse], atol=1e-6
+    )
+    assert torch.allclose(first["log_power"], second["log_power"], atol=1e-6)
+    loss = energy_weighted_log_power_loss(
+        first["log_power"], base + 0.2, scale=4.0
+    )
+    loss.backward()
+    assert model.output.weight.grad is not None
+    assert model.transfer_scale.grad is not None
 
 
 def test_local_magnitude_transfer_uses_same_cell_residuals() -> None:
@@ -853,6 +899,9 @@ class SchemeECoreTests(unittest.TestCase):
 
     def test_full_resolution_magnitude_refiner(self) -> None:
         test_full_resolution_magnitude_refiner_starts_from_identity()
+
+    def test_local_set_magnitude_refiner(self) -> None:
+        test_local_set_magnitude_refiner_is_identity_and_permutation_invariant()
 
     def test_local_magnitude_transfer(self) -> None:
         test_local_magnitude_transfer_uses_same_cell_residuals()
