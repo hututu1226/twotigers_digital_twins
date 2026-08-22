@@ -117,6 +117,49 @@ def reconstruct_low_rank_residual(
         )
     if selected_rank == 0:
         return mean.expand_as(residual)
-    selected = components[:selected_rank]
-    coefficients = (residual - mean) @ selected.T
-    return mean + coefficients @ selected
+    coefficients = project_low_rank_coefficients(
+        residual, mean, components, selected_rank
+    )
+    return decode_low_rank_coefficients(coefficients, mean, components[:selected_rank])
+
+
+def project_low_rank_coefficients(
+    residual: torch.Tensor,
+    mean: torch.Tensor,
+    components: torch.Tensor,
+    rank: int,
+) -> torch.Tensor:
+    """Project residual rows onto a train-only PCA basis."""
+    if residual.ndim != 2:
+        raise ValueError("residual must be [samples, features]")
+    mean = mean.reshape(1, -1).to(device=residual.device, dtype=residual.dtype)
+    components = components.to(device=residual.device, dtype=residual.dtype)
+    selected_rank = int(rank)
+    if residual.shape[1] != mean.shape[1] or components.shape[1] != mean.shape[1]:
+        raise ValueError("Residual, mean, and component feature widths differ")
+    if selected_rank < 1 or selected_rank > len(components):
+        raise ValueError(
+            f"rank must be between 1 and {len(components)}, got {selected_rank}"
+        )
+    return (residual - mean) @ components[:selected_rank].T
+
+
+def decode_low_rank_coefficients(
+    coefficients: torch.Tensor,
+    mean: torch.Tensor,
+    components: torch.Tensor,
+) -> torch.Tensor:
+    """Decode predicted coefficients without using target information."""
+    if coefficients.ndim != 2 or components.ndim != 2:
+        raise ValueError("coefficients and components must be 2D")
+    mean = mean.reshape(1, -1).to(
+        device=coefficients.device, dtype=coefficients.dtype
+    )
+    components = components.to(
+        device=coefficients.device, dtype=coefficients.dtype
+    )
+    if coefficients.shape[1] != components.shape[0]:
+        raise ValueError("Coefficient width must equal the number of components")
+    if components.shape[1] != mean.shape[1]:
+        raise ValueError("Mean and component feature widths differ")
+    return mean + coefficients @ components

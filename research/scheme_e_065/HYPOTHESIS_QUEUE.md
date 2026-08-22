@@ -4,7 +4,7 @@ Fold0 target 只允许用于最终评估和明确标注的 oracle，不得拟合
 
 | Priority | Hypothesis | Evidence | Expected gain | Oracle ceiling | Minimal probe | GPU cost | Failure signal | Follow-up |
 |---:|---|---|---|---|---|---:|---|---|
-| 1 | 幅度专用 full-resolution log-power 残差能保留 L0-010 的上限，同时比复数系数更可预测。 | L0-010 rank64 magnitude oracle=`0.663754`，增益主要来自 PAS；相位不是最佳分支。 | oracle 维持 `>=0.65`，部署 Probe 目标先 `+0.004`。 | complex-basis magnitude oracle `0.663754`。 | train-only log-power PCA，不训练 predictor。 | <=0.1 h | rank128 仍 `<0.65`。 | 选择最低过线 rank 做共享多输出 GP inner Probe。 |
+| 1 | 每基站的共享多输出 GP 能预测 rank8 full-resolution log-power 残差系数。 | L0-011 的 V4/Teacher rank8 oracle=`0.671796/0.661765`；只需 8 个系数。 | inner 至少 `+0.004`；严格 Fold0 争取 `+0.008` 到 `+0.025`。 | V4 rank8 oracle `0.671796`。 | RQ10/RQ20/Matern20 固定等权，只在 inner 选 0.5/1.0 强度。 | <=0.1 h | inner gain `<0.004` 或系数 skill `<=0`。 | 过 inner 后只运行一次严格 Fold0。 |
 | 2 | 极端高误差样本可由新的可靠回退候选改善。 | 最差 5% 占 67.27% 误差能量，但当前候选 Router OOF 增益为 0。 | `+0.003` 到 `+0.010`。 | 必须先有新的二专家 oracle `>=+0.010`。 | 新候选产生后先算二专家 oracle。 | <=0.2 h | 无新候选或 oracle 增益 `<0.010`。 | 只允许 OOF gate。 |
 
 ## 已 DROP

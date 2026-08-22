@@ -16,7 +16,8 @@
 | L0-009 | 新候选与权威 V4 基线的严格 Fold0 oracle 能否跨过 0.65。 | 只训练已选 epoch，统一评估固定候选。 | 完美选择达到 0.656555；所有单候选低于基线。 | oracle 0.656555 | - | - | - | +0.029465 | PROMOTE ROUTER PROBE | 0.014 h |
 | L1-002 | inner OOF gain router 能否学到候选互补性。 | ExtraTrees 预测每个候选相对基线的逐样本收益，保守阈值回退。 | inner OOF 增益 0；router 未过门槛。 | 0.627089 | 0.567081 | 0.758360 | 1.063711 | +0.000000 | DROP | 0.013 h |
 | L0-010 | 归一化复数角时延残差是否存在不同于 AE Detail 的低秩结构。 | Fold0-train OOF teacher 残差拟合 PCA；分别测 magnitude/phase/complex oracle。 | rank64 magnitude 首次越过 0.65。 | oracle 0.663754 | 0.649174 | 0.766221 | 1.049267 | +0.036665 | PROMOTE | 0.004 h |
-| L0-011 | 幅度专用 log-power 表示能否用更干净的低秩系数保留 L0-010 上限。 | 全分辨率 log(1+4P) 残差 PCA，只做 magnitude oracle。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
+| L0-011 | 幅度专用 log-power 表示能否用更干净的低秩系数保留 L0-010 上限。 | 全分辨率 log(1+4P) 残差 PCA，只做 magnitude oracle。 | rank8 已越过 0.65，rank128 达 0.762587。 | oracle 0.762587 | 0.795743 | 0.869032 | 1.068750 | +0.135498 | PROMOTE TO L1 | 0.003 h |
+| L1-003 | 三核共享多输出 GP 能否跨空间洞预测 rank8 幅度残差系数。 | 每个 BS 独立拟合 RQ10/RQ20/Matern20，固定等权；inner 仅选 0.5/1.0 修正强度。 | READY | - | - | - | - | - | RUNNING | <=0.1 h |
 
 ## L0 结论
 
@@ -137,3 +138,37 @@ rank8/16/32/64 magnitude oracle 分别为 `0.631395 / 0.638181 / 0.648372 / 0.66
 ### Next Action
 
 执行 L0-011 full-resolution log-power residual oracle，并据最低过线 rank 设计共享多输出 GP Probe。
+
+## L0-011
+
+### Hypothesis
+
+去掉相位、直接在全分辨率 `log(1+4P)` 能量图上建立残差基底，可以用比 L0-010 更少的系数跨过 `0.65`。
+
+### Evidence
+
+L0-010 的最佳分支是 magnitude-only，rank64 为 `0.663754`；phase-only 和 complex 修正都不是最佳选择。
+
+### Minimal Experiment
+
+每个基站仅用 Fold0-train 的 OOF Teacher 残差拟合 PCA。Fold0 target 只计算不可部署的 oracle 系数，测试 rank0/8/16/32/64/128。
+
+### Result
+
+V4 baseline 的 rank8/16/32/64/128 magnitude oracle 分别为 `0.671796 / 0.702648 / 0.724032 / 0.744009 / 0.762587`。rank8 已是最低测试过线维度；对应 PAS=`0.650232`、PDP=`0.787438`、NMSE=`1.067647`。OOF Teacher seed 的 rank8 oracle 也达到 `0.661765`。全流程耗时 `11.04` 秒。
+
+### Interpretation
+
+幅度专用表示显著优于复数残差表示，而且只需 8 个理想系数就有足够上限。现在真正需要验证的是这 8 个系数能否在未见空间块上预测，而不是继续提高 PCA rank。
+
+### Decision
+
+`PROMOTE TO L1`。固定 rank8，执行一次每基站三核共享多输出 GP 的严格 inner spatial Probe。
+
+### Repository Update
+
+代码提交：`7485c64`；报告：`research/scheme_e_065/L0_011_MAGNITUDE_ORACLE.json`；基底：`artifacts/scheme_e_065/l0_011_magnitude_residual/train_only_log_power_basis.pt`。
+
+### Next Action
+
+执行 L1-003。inner Score 至少增加 `0.004` 才允许严格 Fold0；不通过则直接 DROP，不扩大 rank 或扫描核参数。

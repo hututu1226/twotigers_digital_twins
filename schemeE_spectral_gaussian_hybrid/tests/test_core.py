@@ -16,6 +16,8 @@ from scheme_e.complex_residual import (
     angle_delay_log_power,
     angle_delay_to_complex,
     complex_to_angle_delay,
+    decode_low_rank_coefficients,
+    project_low_rank_coefficients,
     reconstruct_low_rank_residual,
     replace_angle_delay_log_power,
     split_complex_correction,
@@ -237,9 +239,12 @@ def test_low_rank_residual_reconstruction_uses_only_selected_rank() -> None:
     rank0 = reconstruct_low_rank_residual(residual, mean, components, rank=0)
     rank1 = reconstruct_low_rank_residual(residual, mean, components, rank=1)
     rank2 = reconstruct_low_rank_residual(residual, mean, components, rank=2)
+    coefficients = project_low_rank_coefficients(residual, mean, components, rank=2)
+    decoded = decode_low_rank_coefficients(coefficients, mean, components)
     assert torch.allclose(rank0, mean.expand_as(residual))
     assert torch.allclose(rank1, torch.tensor([[3.0, 2.0, 7.0], [5.0, 2.0, 7.0]]))
     assert torch.allclose(rank2, torch.tensor([[3.0, 4.0, 7.0], [5.0, 8.0, 7.0]]))
+    assert torch.allclose(decoded, rank2)
 
 
 def test_log_power_replacement_preserves_base_phase() -> None:
